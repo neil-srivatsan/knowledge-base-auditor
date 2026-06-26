@@ -105,6 +105,14 @@ The default review queue shows actionable findings only. Terminal or intentional
 
 Review metadata includes owner, due date, note, snooze date, and dismissal or acceptance reason. Findings are tracked with stable keys across scans, and issues can auto-resolve to `fixed` when the underlying evidence disappears on a later scan.
 
+## Screenshots
+
+![Knowledge Base Auditor demo results](docs/images/06-results-overview.png)
+
+![Evidence detail drawer with suggested replacement](docs/images/07-result-detail-drawer.png)
+
+![Review queue with actionable findings](docs/images/08-review-queue-overview.png)
+
 ## Quick Start
 
 ### Try The Demo
