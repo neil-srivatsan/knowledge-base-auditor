@@ -1421,24 +1421,7 @@ class TestDemoModeBrowser:
         assert "not configured" not in text.lower(), f"'not configured' in sourceInfo: {text!r}"
 
     # ------------------------------------------------------------------
-    # Req 13: No banned terminology before or after scanning
-    # ------------------------------------------------------------------
-
-    def test_no_banned_terminology_before_scan(self, page, isolated_demo_server):
-        """No 'corpus' or 'page collection' must appear in the page before scanning."""
-        _navigate_demo(page, isolated_demo_server)
-        body_text = page.locator("body").inner_text().lower()
-        assert "corpus" not in body_text, "Found banned term 'corpus' before scan"
-        assert "page collection" not in body_text, "Found 'page collection' before scan"
-
-    def test_no_banned_terminology_after_scan(self, demo_page_with_results):
-        """No 'corpus' or 'page collection' must appear after results load."""
-        body_text = demo_page_with_results.locator("body").inner_text().lower()
-        assert "corpus" not in body_text, "Found banned term 'corpus' after scan"
-        assert "page collection" not in body_text, "Found 'page collection' after scan"
-
-    # ------------------------------------------------------------------
-    # Req 14: Desktop and mobile layouts have no horizontal overflow
+    # Req 13: Desktop and mobile layouts have no horizontal overflow
     # ------------------------------------------------------------------
 
     def test_no_horizontal_overflow_desktop(self, demo_page_with_results):

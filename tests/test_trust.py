@@ -667,53 +667,53 @@ class TestTitleNormalization:
         assert stale is not None
 
 
-# --- Corpus-local supersession ---
+# --- Scan-local supersession ---
 
 
-class TestCorpusSupersession:
+class TestScanSupersession:
     """Year/version-suffixed docs should be stale when a newer sibling exists."""
 
     def test_older_year_stale_when_newer_exists(self):
         doc = _doc(id="old", title="Migration Guide 2021")
-        corpus = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status == "stale"
         assert "2024" in verdict.reason
 
     def test_newer_year_not_stale(self):
         doc = _doc(id="new", title="Migration Guide 2024")
-        corpus = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status != "stale"
 
     def test_older_version_stale_when_newer_exists(self):
         doc = _doc(id="v1", title="API Guide v1")
-        corpus = {"v1": "API Guide v1", "v2": "API Guide v2"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"v1": "API Guide v1", "v2": "API Guide v2"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status == "stale"
         assert "v2" in verdict.reason
 
     def test_stale_suffix_with_base_sibling(self):
         doc = _doc(id="old", title="API Guide (old)")
-        corpus = {"old": "API Guide (old)", "current": "API Guide"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"old": "API Guide (old)", "current": "API Guide"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status == "stale"
         assert "stale suffix" in verdict.reason.lower()
 
     def test_year_suffix_alone_without_sibling_not_stale(self):
         """A year-suffixed doc with no sibling should NOT be stale."""
         doc = _doc(id="only", title="Migration Guide 2021")
-        corpus = {"only": "Migration Guide 2021"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"only": "Migration Guide 2021"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status != "stale"
 
-    def test_no_corpus_titles_no_supersession(self):
-        """Without corpus_titles, no supersession check happens."""
+    def test_no_scan_titles_no_supersession(self):
+        """Without scan_titles, no supersession check happens."""
         doc = _doc(id="old", title="Migration Guide 2021")
         verdict = classify(doc, [], incoming_ref_count=0)
         assert verdict.status != "stale"
 
-    def test_reference_resolution_scoped_to_corpus(self):
+    def test_reference_resolution_scoped_to_scan(self):
         """ReferenceAnalyzer resolves only within passed document list."""
         from kb_audit.analyzers.references import ReferenceAnalyzer
         from kb_audit.models import Document as D
@@ -725,7 +725,7 @@ class TestCorpusSupersession:
                source_type="test", last_modified=datetime.now(timezone.utc))
 
         analyzer = ReferenceAnalyzer()
-        # Only pass d1 — Guide B is NOT in the corpus
+        # Only pass d1 — Guide B is NOT in the scan
         signals = analyzer.analyze([d1])
         d1_signals = signals.get("1", [])
         resolved = [s for s in d1_signals if s.signal_type == "resolved_reference"]

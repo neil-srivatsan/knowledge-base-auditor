@@ -93,7 +93,7 @@ class ReferenceAnalyzer(Analyzer):
 
         # --- Step 3: base-title variant match on the reference text ---
         # The reference itself might have a suffix that doesn't match any
-        # document exactly, but its base title matches a corpus document.
+        # document exactly, but its base title matches a document in the scan.
         # This is already covered by step 2 since we normalize the ref.
         # No additional step needed.
 
@@ -130,7 +130,7 @@ class ReferenceAnalyzer(Analyzer):
                 "resolved_title": target.title,
                 "normalized_reference": normalized_ref,
                 "match_type": "base_title_variant",
-                "resolution_scope": "scan_corpus",
+                "resolution_scope": "scan_scope",
             },
         )
 
@@ -149,7 +149,7 @@ class ReferenceAnalyzer(Analyzer):
                 "normalized_reference": normalized_ref,
                 "matching_doc_ids": [m.id for m in matches],
                 "matching_titles": [m.title for m in matches],
-                "resolution_scope": "scan_corpus",
+                "resolution_scope": "scan_scope",
             },
         )
 
@@ -162,6 +162,6 @@ class ReferenceAnalyzer(Analyzer):
             details={
                 "referenced_title": ref,
                 "normalized_reference": normalized_ref,
-                "resolution_scope": "scan_corpus",
+                "resolution_scope": "scan_scope",
             },
         )

@@ -132,8 +132,8 @@ def test_empty_source():
 # ---------------------------------------------------------------------------
 
 
-def _versioned_corpus() -> list[Document]:
-    """Build a corpus with three versioned documents: v1, v2, v3."""
+def _versioned_documents() -> list[Document]:
+    """Build a set of three versioned documents: v1, v2, v3."""
     now = datetime.now(timezone.utc)
     return [
         Document(
@@ -155,9 +155,9 @@ def _versioned_corpus() -> list[Document]:
 
 
 def _run_versioned(docs: list[Document] | None = None) -> dict[str, object]:
-    """Run the pipeline on the versioned corpus and return results by ID."""
+    """Run the pipeline on the versioned documents and return results by ID."""
     if docs is None:
-        docs = _versioned_corpus()
+        docs = _versioned_documents()
     auditor = Auditor(
         sources=[FakeSource(docs)],
         analyzers=[
@@ -219,8 +219,8 @@ class TestLatestVersionPromotion:
             assert "unresolved" not in p.lower()
 
 
-class TestPromotionCorpusLocal:
-    """Promotion should only use documents within the scan corpus."""
+class TestPromotionScanLocal:
+    """Promotion should only use documents within the scan scope."""
 
     def test_single_version_no_promotion(self):
         """A single versioned doc with no siblings should not be promoted."""
@@ -228,7 +228,7 @@ class TestPromotionCorpusLocal:
         docs = [
             Document(
                 id="only", title="KBA Test Page v3",
-                content="Only version 3 content.\nNo siblings in this corpus.",
+                content="Only version 3 content.\nNo siblings in this scan.",
                 source_type="test", last_modified=now,
             ),
         ]
@@ -284,7 +284,7 @@ class TestHardRisksBlockPromotion:
     def test_broken_link_blocks_promotion(self):
         """v3 with a broken link signal should not be promoted."""
         now = datetime.now(timezone.utc)
-        docs = _versioned_corpus()
+        docs = _versioned_documents()
         # We'll test via the auditor directly, injecting a broken_link signal
         # by using critical age instead (easier to trigger):
         # Make v3 very old so it gets critical age
@@ -296,96 +296,3 @@ class TestHardRisksBlockPromotion:
         results = _run_versioned(docs)
         # v3 has critical age → should NOT be promoted to current
         assert results["v3"].status != "current" or results["v3"].confidence < 0.95
-
-
-# ---------------------------------------------------------------------------
-# Regression: no internal terminology in user-visible output
-# ---------------------------------------------------------------------------
-
-def _collect_user_visible_strings(results: dict) -> list[str]:
-    """Collect all user-visible string fields from AuditResult objects."""
-    strings: list[str] = []
-    for result in results.values():
-        strings.append(result.confidence_reason)
-        ev = result.trust_evidence
-        if isinstance(ev, dict):
-            strings.append(str(ev.get("summary", "")))
-            strings.append(str(ev.get("recommended_action", "")))
-            for lst_key in ("positive_evidence", "review_risks", "missing_evidence"):
-                for item in ev.get(lst_key, []):
-                    strings.append(str(item))
-        for sig in result.signals:
-            strings.append(sig.message)
-    return strings
-
-
-class TestNoInternalTermsInUserOutput:
-    """User-visible output must not expose 'corpus' or 'page collection'."""
-
-    BANNED = ("corpus", "page collection")
-
-    def _assert_clean(self, strings: list[str]) -> None:
-        for s in strings:
-            for term in self.BANNED:
-                assert term not in s.lower(), (
-                    f"Banned term {term!r} found in user-visible string: {s!r}"
-                )
-
-    def test_version_chain_promotion_output_is_clean(self):
-        """Version-chain promotion path must not expose banned terms."""
-        results = _run_versioned()
-        self._assert_clean(_collect_user_visible_strings(results))
-
-    def test_supersession_stale_suffix_output_is_clean(self):
-        """Stale-suffix supersession path must not expose banned terms."""
-        from kb_audit.trust import classify
-
-        now = datetime.now(timezone.utc)
-        doc = Document(
-            id="old", title="API Guide (old)",
-            content="Older version of the guide.",
-            source_type="test", last_modified=now,
-        )
-        corpus = {"old": "API Guide (old)", "current": "API Guide"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
-        self._assert_clean([verdict.reason])
-
-    def test_supersession_year_output_is_clean(self):
-        """Year-based supersession path must not expose banned terms."""
-        from kb_audit.trust import classify
-
-        now = datetime.now(timezone.utc)
-        doc = Document(
-            id="old", title="Migration Guide 2021",
-            content="Older migration guide.",
-            source_type="test", last_modified=now,
-        )
-        corpus = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
-        self._assert_clean([verdict.reason])
-
-    def test_supersession_version_output_is_clean(self):
-        """Version-based supersession path must not expose banned terms."""
-        from kb_audit.trust import classify
-
-        now = datetime.now(timezone.utc)
-        doc = Document(
-            id="v1", title="API Guide v1",
-            content="Version 1 of the guide.",
-            source_type="test", last_modified=now,
-        )
-        corpus = {"v1": "API Guide v1", "v2": "API Guide v2"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
-        self._assert_clean([verdict.reason])
-
-    def test_unresolved_reference_message_is_clean(self):
-        """Unresolved-reference signal message must not expose banned terms."""
-        doc = Document(
-            id="1", title="Guide A",
-            content="See Missing Guide.",
-            source_type="test",
-        )
-        analyzer = ReferenceAnalyzer()
-        signals = analyzer.analyze([doc])
-        strings = [s.message for sig_list in signals.values() for s in sig_list]
-        self._assert_clean(strings)

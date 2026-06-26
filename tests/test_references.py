@@ -102,7 +102,7 @@ class TestAmbiguousVariantResolution:
         signals = analyzer.analyze([d1, d2, d3])
         s = signals["1"][0]
         assert s.details["normalized_reference"] == "migration guide"
-        assert s.details["resolution_scope"] == "scan_corpus"
+        assert s.details["resolution_scope"] == "scan_scope"
 
 
 class TestUnresolvedReferences:
@@ -123,7 +123,7 @@ class TestUnresolvedReferences:
         assert s.signal_type == "unresolved_reference"
         assert s.details["referenced_title"] == "Payment Platform Migration Guide 2021"
         assert s.details["normalized_reference"] == "payment platform migration guide"
-        assert s.details["resolution_scope"] == "scan_corpus"
+        assert s.details["resolution_scope"] == "scan_scope"
 
     def test_unresolved_message_mentions_scan_pages(self):
         d1 = _doc("1", "Payments", "See Missing Guide.")
@@ -133,11 +133,11 @@ class TestUnresolvedReferences:
         assert "pages in this scan" in s.message
 
 
-class TestCorpusScoping:
+class TestScanScoping:
     """Resolution must only use documents passed to the analyzer."""
 
-    def test_not_in_corpus_is_unresolved(self):
-        """A reference to a real title, but the doc isn't in the corpus list."""
+    def test_not_in_scan_is_unresolved(self):
+        """A reference to a real title, but the doc isn't in the scan's document list."""
         d1 = _doc("1", "Guide A", "For details, see Guide B.")
         # Guide B is NOT passed to the analyzer
         analyzer = ReferenceAnalyzer()
@@ -155,8 +155,8 @@ class TestCorpusScoping:
                 assert s.signal_type != "resolved_reference" or s.details["resolved_doc_id"] != "1"
 
 
-class TestPaymentsCorpusReferences:
-    """Verify the payments corpus reference behavior with improved matching."""
+class TestPaymentsScanReferences:
+    """Verify the payments scan reference behavior with improved matching."""
 
     def test_migration_guide_2021_resolves_or_is_unresolved(self):
         """'Payment Platform Migration Guide 2021' — if no matching doc exists, unresolved.

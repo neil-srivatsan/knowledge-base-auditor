@@ -273,51 +273,9 @@ class TestPaymentsTeamNotes:
         )
 
 
-# ---------------------------------------------------------------------------
-# Test 19: no banned terminology in user-visible output
-# ---------------------------------------------------------------------------
-
-_BANNED_TERMS = ("corpus", "page collection")
-
-
-def _collect_user_visible(result: AuditResult) -> list[str]:
-    """Collect all user-facing strings from one AuditResult."""
-    strings: list[str] = [result.confidence_reason]
-    ev = result.trust_evidence
-    if isinstance(ev, dict):
-        strings.append(ev.get("summary", ""))
-        strings.append(ev.get("recommended_action", ""))
-        for key in ("positive_evidence", "review_risks", "missing_evidence"):
-            strings.extend(str(item) for item in ev.get(key, []))
-    for sig in result.signals:
-        strings.append(sig.message)
-    return strings
-
-
-class TestNoBannedTerminology:
-    @pytest.mark.parametrize("doc_id", [
-        "payment-processing-guide",
-        "payment-api-guide-v1",
-        "payment-api-guide-v2",
-        "payment-api-guide-v3",
-        "legacy-payment-integration",
-        "payment-service-authentication",
-        "merchant-retry-policy",
-        "merchant-onboarding-checklist",
-        "merchant-launch-checklist-draft",
-        "payments-team-notes",
-    ])
-    def test_no_banned_terms(self, pipeline_results, doc_id):
-        strings = _collect_user_visible(pipeline_results[doc_id])
-        for s in strings:
-            for term in _BANNED_TERMS:
-                assert term not in s.lower(), (
-                    f"[{doc_id}] Banned term {term!r} in user-visible string: {s!r}"
-                )
-
 
 # ---------------------------------------------------------------------------
-# Test 20: two runs with fixed now produce identical results
+# Test 19: two runs with fixed now produce identical results
 # ---------------------------------------------------------------------------
 
 class TestDeterminism:

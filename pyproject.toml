@@ -7,7 +7,7 @@ name = "kb-audit"
 version = "0.1.0"
 description = "Detect stale and outdated documentation in your knowledge base"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.1",

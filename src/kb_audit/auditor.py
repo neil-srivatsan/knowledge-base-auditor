@@ -136,13 +136,13 @@ class Auditor:
 
             # 4. Classify each document using the trust classifier
             doc_by_id = {doc.id: doc for doc in documents}
-            corpus_titles = {doc.id: doc.title for doc in documents}
+            scan_titles = {doc.id: doc.title for doc in documents}
             raw_results: dict[str, AuditResult] = {}
             for doc in documents:
                 signals = all_signals.get(doc.id, [])
                 verdict = classify(
                     doc, signals, incoming_refs.get(doc.id, 0),
-                    corpus_titles=corpus_titles,
+                    scan_titles=scan_titles,
                 )
                 result = AuditResult(
                     document=doc,

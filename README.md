@@ -411,4 +411,4 @@ Likely next product capabilities:
 
 ## License
 
-MIT
+Apache-2.0. Copyright 2026 Neil Srivatsan.

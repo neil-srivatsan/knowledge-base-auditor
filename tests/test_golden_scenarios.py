@@ -1,4 +1,4 @@
-"""Golden corpus test suite — end-to-end scenarios that exercise the full
+"""Golden scenarios test suite — end-to-end scenarios that exercise the full
 trust classifier with realistic document content and metadata combinations.
 
 Each scenario is a self-contained unit test with a clear expected outcome
@@ -156,29 +156,29 @@ class TestGoldenCanonical:
 
 
 # ---------------------------------------------------------------------------
-# Scenario 6: Corpus version supersession
+# Scenario 6: Scan version supersession
 # ---------------------------------------------------------------------------
 
-class TestGoldenCorpusVersions:
+class TestGoldenVersionSupersession:
     """Year-suffixed docs should be stale when a newer sibling exists."""
 
     def test_older_year_stale(self):
         doc = _doc(id="old", title="Migration Guide 2021")
-        corpus = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status == "stale"
         assert "2024" in verdict.reason
 
     def test_newer_year_not_stale(self):
         doc = _doc(id="new", title="Migration Guide 2024")
-        corpus = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"old": "Migration Guide 2021", "new": "Migration Guide 2024"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status != "stale"
 
     def test_stale_suffix_old(self):
         doc = _doc(id="old", title="API Guide (old)")
-        corpus = {"old": "API Guide (old)", "cur": "API Guide"}
-        verdict = classify(doc, [], incoming_ref_count=0, corpus_titles=corpus)
+        scan_titles = {"old": "API Guide (old)", "cur": "API Guide"}
+        verdict = classify(doc, [], incoming_ref_count=0, scan_titles=scan_titles)
         assert verdict.status == "stale"
 
 

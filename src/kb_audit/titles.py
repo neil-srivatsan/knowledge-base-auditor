@@ -1,4 +1,4 @@
-"""Shared title normalization for corpus-local matching.
+"""Shared title normalization for scan-local matching.
 
 Used by the reference analyzer, similarity analyzer, and trust classifier
 to compare document titles after stripping version/year/stale suffixes.

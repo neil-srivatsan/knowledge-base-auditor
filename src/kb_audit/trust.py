@@ -10,7 +10,7 @@ Evidence categories (conceptual):
     (Status: Legacy, "replaced by …", older version with newer sibling).
   - **maintenance_risks**: issues suggesting the content may be unreliable
     (unresolved refs, broken links, overdue review, old last-reviewed).
-  - **corpus_context**: observations about corpus-level relationships
+  - **scan_context**: observations about scan-level relationships
     (incoming ref count, resolved outgoing refs, sibling versions).
   - **missing_evidence**: absent trust markers
     (no status field, no owner, no last-reviewed date).
@@ -163,15 +163,15 @@ def classify(
     signals: list[StalenessSignal],
     incoming_ref_count: int = 0,
     *,
-    corpus_titles: dict[str, str] | None = None,
+    scan_titles: dict[str, str] | None = None,
 ) -> TrustVerdict:
     """Classify a single document's trust status.
 
     Parameters
     ----------
-    corpus_titles
+    scan_titles
         Optional mapping of ``{doc_id: title}`` for every document in the
-        current scan corpus.  Used for corpus-local supersession detection
+        current scan.  Used for scan-local supersession detection
         (e.g. "Guide 2021" is stale when "Guide 2024" exists).
     """
 
@@ -185,10 +185,10 @@ def classify(
     # --- Step 1: Explicit stale evidence wins ---
     stale_reasons = _check_stale_evidence(signals, parsed, doc)
 
-    # Corpus-local supersession (only adds evidence, never sole stale trigger
+    # Scan-local supersession (only adds evidence, never sole stale trigger
     # unless the title has a clearly stale suffix like "(old)").
-    if corpus_titles is not None:
-        supersession = _check_corpus_supersession(doc, corpus_titles)
+    if scan_titles is not None:
+        supersession = _check_scan_supersession(doc, scan_titles)
         stale_reasons.extend(supersession)
 
     if stale_reasons:
@@ -817,14 +817,14 @@ def _unknown_confidence(doc: Document) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Title normalization & corpus-local supersession
+# Title normalization & scan-local supersession
 # ---------------------------------------------------------------------------
 
-def _check_corpus_supersession(
+def _check_scan_supersession(
     doc: Document,
-    corpus_titles: dict[str, str],
+    scan_titles: dict[str, str],
 ) -> list[str]:
-    """Return stale reasons if this doc is superseded by a corpus sibling.
+    """Return stale reasons if this doc is superseded by a sibling in the scan.
 
     Rules:
     - A doc with a stale suffix like "(old)" is stale if a base sibling exists.
@@ -834,9 +834,9 @@ def _check_corpus_supersession(
     reasons: list[str] = []
     my_base, my_ver, my_stale = normalize_title(doc.title)
 
-    # Build index of corpus siblings with the same base title
+    # Build index of scan siblings with the same base title
     siblings: list[tuple[str, str, str | None, str | None]] = []  # (id, title, ver, stale)
-    for other_id, other_title in corpus_titles.items():
+    for other_id, other_title in scan_titles.items():
         if other_id == doc.id:
             continue
         other_base, other_ver, other_stale = normalize_title(other_title)

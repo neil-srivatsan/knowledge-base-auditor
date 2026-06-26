@@ -1,4 +1,4 @@
-"""Payments corpus integration tests — classify realistic payment documentation.
+"""Payments scan integration tests — classify realistic payment documentation.
 
 Tests use in-memory Document fixtures modeled on a real Notion payments workspace.
 The full pipeline (analyzers + trust classifier) is exercised.
@@ -15,11 +15,11 @@ from kb_audit.sources.base import DocumentSource
 
 
 # ---------------------------------------------------------------------------
-# Fixtures: realistic payment documentation corpus
+# Fixtures: realistic payment documentation
 # ---------------------------------------------------------------------------
 
-def _payments_corpus() -> list[Document]:
-    """Build the Payments corpus — 6 documents with cross-references."""
+def _payments_documents() -> list[Document]:
+    """Build the Payments documents — 6 documents with cross-references."""
     now = datetime.now(timezone.utc)
 
     payment_processing_guide = Document(
@@ -128,9 +128,9 @@ class FakeSource(DocumentSource):
         yield from self._docs
 
 
-def _run_corpus() -> dict[str, AuditResult]:
-    """Run the full pipeline on the Payments corpus and return results by ID."""
-    docs = _payments_corpus()
+def _run_scan() -> dict[str, AuditResult]:
+    """Run the full pipeline on the Payments documents and return results by ID."""
+    docs = _payments_documents()
     auditor = Auditor(
         sources=[FakeSource(docs)],
         analyzers=[
@@ -144,7 +144,7 @@ def _run_corpus() -> dict[str, AuditResult]:
 
 
 # ---------------------------------------------------------------------------
-# Corpus-level tests
+# Scan-level tests
 # ---------------------------------------------------------------------------
 
 
@@ -152,22 +152,22 @@ class TestPaymentProcessingGuide:
     """Payment Processing Guide — referenced by multiple docs, has Status: Current."""
 
     def test_is_current(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["ppg-1"]
         assert r.status == "current", f"Expected current, got {r.status}: {r.confidence_reason}"
 
     def test_reason_mentions_references(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["ppg-1"]
         assert "Referenced by" in r.confidence_reason
 
     def test_reason_includes_last_reviewed(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["ppg-1"]
         assert "Last reviewed 2026-03-01" in r.confidence_reason
 
     def test_reason_includes_owner(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["ppg-1"]
         assert "Payments Team" in r.confidence_reason
 
@@ -180,18 +180,18 @@ class TestMigrationNotes:
     """
 
     def test_old_review_forces_needs_review(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["pmn-1"]
         assert r.status == "needs_review", f"Expected needs_review, got {r.status}: {r.confidence_reason}"
 
     def test_positive_evidence_preserved(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["pmn-1"]
         pos = r.trust_evidence.get("positive_evidence", [])
         assert len(pos) > 0, "Positive evidence should be preserved on needs_review"
 
     def test_reason_mentions_old_review_date(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["pmn-1"]
         assert "Last reviewed" in r.confidence_reason and "days ago" in r.confidence_reason
 
@@ -205,20 +205,20 @@ class TestPaymentServiceAuth:
 
     def test_is_needs_review(self):
         """Supported + old review → needs_review despite incoming refs."""
-        results = _run_corpus()
+        results = _run_scan()
         r = results["psa-1"]
         assert r.status == "needs_review", (
             f"Expected needs_review, got {r.status}: {r.confidence_reason}"
         )
 
     def test_reason_mentions_last_reviewed(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["psa-1"]
         assert "Last reviewed" in r.confidence_reason
 
     def test_reason_includes_trust_context(self):
         """PSA should explain more than just old review date."""
-        results = _run_corpus()
+        results = _run_scan()
         r = results["psa-1"]
         assert "Referenced by" in r.confidence_reason
         assert "Supported" in r.confidence_reason
@@ -228,14 +228,14 @@ class TestMerchantChecklist:
     """Merchant Onboarding Checklist — Status: Supported + old Last reviewed + no incoming refs."""
 
     def test_is_needs_review(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["moc-1"]
         assert r.status == "needs_review", (
             f"Expected needs_review, got {r.status}: {r.confidence_reason}"
         )
 
     def test_reason_includes_context(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["moc-1"]
         assert "Last reviewed" in r.confidence_reason
         assert "No incoming references" in r.confidence_reason
@@ -246,12 +246,12 @@ class TestLegacyIntegration:
     """Legacy Payment Integration — Status: Legacy → stale."""
 
     def test_is_stale(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["lpi-1"]
         assert r.status == "stale", f"Expected stale, got {r.status}: {r.confidence_reason}"
 
     def test_reason_mentions_legacy(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["lpi-1"]
         assert "Legacy" in r.confidence_reason
 
@@ -260,21 +260,21 @@ class TestApiKeySetup:
     """Payment API Key Setup — references legacy doc + unresolved migration guide → needs_review."""
 
     def test_is_needs_review(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["aks-1"]
         assert r.status == "needs_review", f"Expected needs_review, got {r.status}: {r.confidence_reason}"
 
     def test_reason_mentions_unresolved(self):
-        results = _run_corpus()
+        results = _run_scan()
         r = results["aks-1"]
         assert "unresolved" in r.confidence_reason.lower()
 
 
-class TestCorpusNeverSaysNoStalenessIndicators:
-    """No document in the corpus should have 'No staleness indicators detected' as reason."""
+class TestScanNeverSaysNoStalenessIndicators:
+    """No document in the scan should have 'No staleness indicators detected' as reason."""
 
     def test_all_reasons_are_descriptive(self):
-        results = _run_corpus()
+        results = _run_scan()
         for doc_id, r in results.items():
             assert "No staleness indicators detected" not in r.confidence_reason, (
                 f"{r.document.title} ({doc_id}) has forbidden reason: {r.confidence_reason}"
