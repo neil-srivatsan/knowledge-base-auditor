@@ -1701,10 +1701,23 @@ class TestScanLease:
             mock_logger.error.assert_not_called()
 
     def test_running_tests_creates_no_cwd_db_files(self):
-        """test_web.py must not leave SQLite or MagicMock files in the working dir."""
+        """test_web.py must not leave unexpected SQLite or MagicMock files in the working dir.
+
+        Known runtime DB files created by normal use (e.g. kb-audit demo) are allowed.
+        """
         import os
+        allowed_runtime_db_files = {
+            "kbaudit.db",
+            "kbaudit-demo.db",
+            "kbaudit-demo.db-wal",
+            "kbaudit-demo.db-shm",
+        }
         cwd_files = os.listdir(".")
-        bad = [f for f in cwd_files if f.endswith(".db") or f.startswith("<MagicMock")]
+        bad = [
+            f for f in cwd_files
+            if (f.endswith(".db") and f not in allowed_runtime_db_files)
+            or f.startswith("<MagicMock")
+        ]
         assert bad == [], f"Unexpected files in cwd: {bad}"
 
 
