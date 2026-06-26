@@ -1,0 +1,30 @@
+# Knowledge Base Auditor configuration
+#
+# Notion API key should be set in .env or as NOTION_API_KEY env var.
+
+notion:
+  # Scan a specific page and its children:
+  # root_page_id: "your-page-id-here"
+  #
+  # Or scan a Notion database:
+  # database_id: "your-database-id-here"
+  #
+  # If neither is set, all pages accessible to the integration are scanned.
+
+analyzers:
+  timestamp:
+    warning_days: 90
+    critical_days: 180
+
+  similarity:
+    threshold: 0.80
+
+  version_refs:
+    current_versions:
+      api: "v3"
+      python: "3.12"
+    patterns:
+      - 'v\d+\.\d+(\.\d+)?'
+      - 'API v\d+'
+
+# database_url: "sqlite:///kbaudit.db"

@@ -1,0 +1,3023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KB Audit</title>
+<style>
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --border: #e2e6ea;
+    --text: #1a1d21;
+    --text-secondary: #5e6368;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --green: #16a34a;
+    --green-bg: #dcfce7;
+    --amber: #d97706;
+    --amber-bg: #fef3c7;
+    --red: #dc2626;
+    --red-bg: #fee2e2;
+    --cyan: #0891b2;
+    --cyan-bg: #cffafe;
+    --purple: #9333ea;
+    --purple-bg: #f3e8ff;
+    --radius: 8px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,0.1);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--text);
+    color: #fff;
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  header .badge {
+    font-size: 11px;
+    background: rgba(255,255,255,0.15);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 24px;
+  }
+
+  @media (max-width: 900px) {
+    .container { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+
+  .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-body { padding: 20px; }
+
+  /* Scan Controls */
+  .controls {
+    grid-column: 1 / -1;
+  }
+
+  .controls .card-body {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 180px;
+  }
+
+  .field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .field input, .field select {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+    background: var(--surface);
+  }
+
+  .field input:focus, .field select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  }
+
+  .field input::placeholder {
+    color: #adb5bd;
+  }
+
+  .btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    white-space: nowrap;
+    height: 38px;
+  }
+
+  .btn:active { transform: scale(0.98); }
+
+  .btn-primary {
+    background: var(--primary);
+    color: #fff;
+  }
+
+  .btn-primary:hover { background: var(--primary-hover); }
+
+  .btn-primary:disabled {
+    background: #93b4f5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .btn-sm {
+    padding: 4px 12px;
+    font-size: 12px;
+    height: 28px;
+    border-radius: 4px;
+  }
+
+  .btn-danger {
+    background: var(--red);
+    color: #fff;
+  }
+
+  .btn-danger:hover { background: #b91c1c; }
+
+  .btn-success {
+    background: var(--green);
+    color: #fff;
+  }
+
+  .btn-success:hover { background: #15803d; }
+
+  .status-line {
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: center;
+    padding-bottom: 2px;
+  }
+
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: none;
+  }
+
+  .spinner.active { display: inline-block; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Tab navigation */
+  .tab-nav {
+    display: flex;
+    gap: 0;
+    border-bottom: 2px solid var(--border);
+    margin-bottom: 0;
+  }
+
+  .tab-btn {
+    padding: 10px 20px;
+    border: none;
+    background: none;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    color: var(--text-secondary);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.15s, border-color 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .tab-btn:hover { color: var(--text); }
+
+  .tab-btn.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+  }
+
+  .tab-btn .tab-count {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text-secondary);
+  }
+
+  .tab-btn.active .tab-count {
+    background: rgba(37, 99, 235, 0.1);
+    color: var(--primary);
+  }
+
+  .tab-count-red {
+    background: var(--red-bg) !important;
+    color: var(--red) !important;
+  }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Summary bar */
+  .summary {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .summary .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .summary .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .dot-green { background: var(--green); }
+  .dot-amber { background: var(--amber); }
+  .dot-red { background: var(--red); }
+  .dot-gray { background: #9ca3af; }
+
+  /* Results table */
+  .results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  .results-table th {
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky;
+    top: 0;
+  }
+
+  .results-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .results-table tr:last-child td { border-bottom: none; }
+
+  .results-table tr:hover td { background: #f1f3f5; }
+
+  .pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .pill-current { background: var(--green-bg); color: var(--green); }
+  .pill-stale { background: var(--red-bg); color: var(--red); }
+  .pill-needs-review { background: var(--amber-bg); color: var(--amber); }
+  .pill-unknown { background: #f1f3f5; color: #6b7280; }
+
+  /* Workflow state pills */
+  .pill-open { background: var(--red-bg); color: var(--red); }
+  .pill-acknowledged { background: var(--amber-bg); color: var(--amber); }
+  .pill-dismissed { background: #f1f3f5; color: #6b7280; }
+  .pill-fixed { background: var(--green-bg); color: var(--green); }
+  .pill-snoozed { background: var(--cyan-bg); color: var(--cyan); }
+  .pill-accepted_risk { background: var(--purple-bg); color: var(--purple); }
+
+  .reason-cell {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .reason-cell strong {
+    color: var(--text);
+    font-size: 12px;
+  }
+
+  .reason-list {
+    margin: 4px 0 0 0;
+    padding-left: 16px;
+    list-style: disc;
+  }
+
+  .reason-list li {
+    padding: 1px 0;
+  }
+
+  .doc-title a {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  .doc-title a:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
+  }
+
+  .doc-meta {
+    color: var(--text-secondary);
+    font-weight: 400;
+    font-size: 13px;
+  }
+
+  .severity-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+
+  .clear-icon {
+    font-size: 14px;
+    cursor: pointer;
+    opacity: 0.35;
+    transition: opacity 0.15s;
+    line-height: 1;
+  }
+
+  .clear-icon:hover { opacity: 0.8; }
+
+  /* Review Queue styles */
+  .queue-toolbar {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .queue-counts {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .queue-count-chip {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  .queue-count-chip:hover { border-color: var(--primary); }
+
+  .queue-count-chip.active {
+    border-color: var(--primary);
+    background: rgba(37, 99, 235, 0.08);
+    color: var(--primary);
+  }
+
+  .queue-row {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .queue-row:hover { background: #f1f3f5; }
+
+  .queue-row:last-child { border-bottom: none; }
+
+  .queue-row-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+
+  .queue-row-title {
+    font-weight: 500;
+    font-size: 14px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .queue-row-title a {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .queue-row-title a:hover {
+    color: var(--primary);
+    text-decoration: underline;
+  }
+
+  .queue-row-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 12px;
+  }
+
+  .queue-row-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  /* Detail panel (overlay) */
+  .detail-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .detail-overlay.active { display: flex; }
+
+  .detail-panel {
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    width: 640px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .detail-panel-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .detail-panel-header h2 {
+    font-size: 16px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .detail-panel-header .close-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+
+  .detail-panel-header .close-btn:hover { background: var(--bg); }
+
+  .detail-panel-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .detail-section {
+    margin-bottom: 16px;
+  }
+
+  .detail-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+
+  .detail-field-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .detail-field-row .field {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .detail-panel-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  /* History timeline */
+  .timeline {
+    padding: 16px 20px;
+    list-style: none;
+  }
+
+  .timeline-item {
+    position: relative;
+    padding: 0 0 20px 24px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .timeline-item:last-child { padding-bottom: 0; }
+
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 14px;
+    bottom: 0;
+    width: 2px;
+    background: var(--border);
+  }
+
+  .timeline-item:last-child::before { display: none; }
+
+  .timeline-item::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--border);
+    border: 2px solid var(--surface);
+    box-shadow: 0 0 0 2px var(--border);
+  }
+
+  .timeline-item.has-changes::after { background: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+  .timeline-item.active::after { background: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+  .timeline-item.active { background: #f0f4ff; margin: 0 -20px; padding-left: 44px; padding-right: 20px; border-radius: var(--radius); }
+
+  .timeline-item:hover:not(.active) { opacity: 0.85; }
+
+  .timeline-header {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+
+  .timeline-date {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .timeline-stats {
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 10px;
+  }
+
+  .timeline-changes {
+    margin-top: 6px;
+    padding: 0;
+    list-style: none;
+    font-size: 12px;
+  }
+
+  .timeline-changes li {
+    padding: 1px 0;
+    color: var(--text-secondary);
+  }
+
+  .timeline-changes .change-stale { color: var(--red); }
+  .timeline-changes .change-needs-review { color: var(--amber); }
+  .timeline-changes .change-current { color: var(--green); }
+  .timeline-changes .change-added { color: var(--primary); }
+
+  .timeline-no-changes {
+    font-size: 12px;
+    color: #bbb;
+    font-style: italic;
+    margin-top: 4px;
+  }
+
+  .timeline-group {
+    position: relative;
+    padding: 0 0 20px 24px;
+    cursor: default;
+  }
+
+  .timeline-group::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 8px;
+    bottom: 0;
+    width: 2px;
+    background: var(--border);
+    border-left: 2px dashed var(--border);
+    background: none;
+  }
+
+  .timeline-group::after {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--border);
+  }
+
+  .timeline-group-label {
+    font-size: 12px;
+    color: #bbb;
+    font-style: italic;
+    cursor: pointer;
+  }
+
+  .timeline-group-label:hover { color: var(--text-secondary); }
+
+  .empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  .empty-state .icon {
+    font-size: 32px;
+    margin-bottom: 12px;
+    opacity: 0.4;
+  }
+
+  .main-col { min-width: 0; }
+
+  /* Changes card */
+  .changes-card {
+    margin: 16px 20px 0;
+    padding: 14px 18px;
+    background: #f0f4ff;
+    border: 1px solid #c7d6f5;
+    border-radius: var(--radius);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .changes-card .changes-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--primary);
+    margin-bottom: 6px;
+  }
+
+  .changes-card ul {
+    margin: 0;
+    padding-left: 18px;
+    list-style: disc;
+    color: var(--text-secondary);
+  }
+
+  .changes-card li {
+    padding: 1px 0;
+  }
+
+  .changes-card .no-changes {
+    color: var(--text-secondary);
+  }
+
+  /* Current version card */
+  .current-version-card {
+    margin: 16px 20px;
+    padding: 16px 20px;
+    background: var(--green-bg);
+    border: 1px solid #bbf7d0;
+    border-radius: var(--radius);
+  }
+
+  .current-version-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--green);
+    margin-bottom: 6px;
+  }
+
+  .current-version-title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .current-version-title a {
+    color: var(--primary);
+    text-decoration: none;
+  }
+
+  .current-version-title a:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
+  }
+
+  .current-version-meta {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .current-version-evidence {
+    margin: 4px 0 10px 18px;
+    padding: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    list-style: disc;
+  }
+
+  .current-version-evidence li {
+    margin-bottom: 1px;
+  }
+
+  /* Report button */
+  .btn-outline {
+    padding: 4px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    background: var(--surface);
+    color: var(--text-secondary);
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    height: 30px;
+  }
+
+  .btn-outline:hover {
+    background: var(--bg);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  /* Report overlay */
+  .report-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .report-overlay.active { display: flex; }
+
+  .report-panel {
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    width: 720px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .report-panel-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .report-panel-header h2 {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .report-panel-header .close-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+
+  .report-panel-header .close-btn:hover { background: var(--bg); }
+
+  .report-panel-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .report-panel-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .report-item {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .report-item:last-child { border-bottom: none; }
+
+  .report-item-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  .report-item-header .title {
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .report-item-header .title a {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .report-item-header .title a:hover {
+    color: var(--primary);
+    text-decoration: underline;
+  }
+
+  .report-item-meta {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .report-signal-list {
+    list-style: none;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .report-signal-list li {
+    padding: 2px 0;
+  }
+
+  .report-summary-box {
+    background: var(--red-bg);
+    border: 1px solid #fecaca;
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 14px;
+  }
+
+  .report-no-stale {
+    background: var(--green-bg);
+    border: 1px solid #bbf7d0;
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    font-size: 14px;
+    color: var(--green);
+    font-weight: 500;
+  }
+
+  /* Results toolbar */
+  .results-toolbar {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+    background: var(--bg);
+  }
+
+  .filter-chip {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .filter-chip:hover { border-color: var(--primary); color: var(--text); }
+
+  .filter-chip.active {
+    border-color: var(--primary);
+    background: rgba(37, 99, 235, 0.08);
+    color: var(--primary);
+  }
+
+  .results-sort {
+    margin-left: auto;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: inherit;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    outline: none;
+  }
+
+  .act-btn {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+
+  .act-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+  .act-btn-success { border-color: var(--green); color: var(--green); }
+  .act-btn-success:hover { background: var(--green-bg); }
+
+  /* Result detail drawer */
+  .result-drawer-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.2);
+    z-index: 90;
+  }
+
+  .result-drawer-backdrop.active { display: block; }
+
+  .result-drawer {
+    position: fixed;
+    top: 0;
+    right: -480px;
+    width: 480px;
+    max-width: 100vw;
+    height: 100vh;
+    background: var(--surface);
+    box-shadow: -4px 0 20px rgba(0,0,0,0.12);
+    z-index: 91;
+    display: flex;
+    flex-direction: column;
+    transition: right 0.25s ease;
+  }
+
+  .result-drawer.active { right: 0; }
+
+  .result-drawer-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .result-drawer-header h2 {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  .result-drawer-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* Screen reader only */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Toast notifications */
+  .toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+
+  .toast {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: var(--shadow-lg);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: auto;
+    max-width: 320px;
+    word-break: break-word;
+  }
+
+  .toast-visible { opacity: 1; transform: translateY(0); }
+  .toast-success { background: var(--green-bg); color: var(--green); border: 1px solid #bbf7d0; }
+  .toast-error { background: var(--red-bg); color: var(--red); border: 1px solid #fecaca; }
+
+  /* Action modal (Snooze / Dismiss) */
+  .action-modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 110;
+  }
+
+  .action-modal-backdrop.active { display: block; }
+
+  .action-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    width: 400px;
+    max-width: 90vw;
+    z-index: 111;
+    flex-direction: column;
+  }
+
+  .action-modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .action-modal-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .action-modal-body { padding: 20px; }
+
+  .action-modal-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .action-modal-error {
+    color: var(--red);
+    font-size: 13px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .field-error {
+    color: var(--red);
+    font-size: 12px;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+
+<div id="toastContainer" class="toast-container"></div>
+
+<header>
+  <h1>KB Audit</h1>
+  <span class="badge" id="sourceBadge"></span>
+</header>
+
+<div class="container">
+
+  <!-- Scan Controls -->
+  <div class="controls card">
+    <div class="card-body">
+      <div class="field" style="min-width:180px;flex:0 0 auto">
+        <label for="scopeSelect">Scan mode</label>
+        <select id="scopeSelect" onchange="onScopeChange()"></select>
+      </div>
+      <div class="field" id="scopeTargetField" style="flex:2;display:none">
+        <label id="scopeTargetLabel" for="scopeTarget">Target</label>
+        <input type="text" id="scopeTarget" oninput="onScopeTargetInput()">
+      </div>
+      <button class="btn btn-primary" id="scanBtn" onclick="startScan()" disabled>Run Scan</button>
+      <div class="status-line">
+        <div class="spinner" id="spinner"></div>
+        <span id="statusText"></span>
+      </div>
+      <div id="sourceInfo" style="flex-basis:100%;font-size:13px;color:var(--text-secondary);margin-top:4px"></div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-col">
+    <div class="card" id="mainCard" style="display:none">
+      <div class="card-header">
+        <span id="mainHeader">Scan Results</span>
+        <button class="btn btn-primary" id="reportBtn" style="display:none" onclick="showReport()">Review Report</button>
+      </div>
+
+      <!-- Tab Navigation -->
+      <nav class="tab-nav" id="tabNav" role="tablist">
+        <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="tabResults" id="tab-btn-results" data-tab="results" onclick="switchTab('results')">
+          Results <span class="tab-count" id="tabCountResults">0</span>
+        </button>
+        <button class="tab-btn" role="tab" aria-selected="false" aria-controls="tabQueue" id="tab-btn-queue" data-tab="queue" onclick="switchTab('queue')">
+          Review Queue <span class="tab-count" id="tabCountQueue">0</span>
+        </button>
+      </nav>
+
+      <!-- Results Tab -->
+      <div class="tab-panel active" id="tabResults" role="tabpanel">
+        <div class="summary" id="summaryBar" style="display:none"></div>
+        <div class="changes-card" id="changesCard" style="display:none"></div>
+        <div class="current-version-card" id="currentCard" style="display:none"></div>
+        <div id="resultsToolbar" class="results-toolbar" style="display:none"></div>
+        <div class="card-body" style="padding:0; overflow-x:auto;">
+          <table class="results-table">
+            <thead>
+              <tr>
+                <th style="width:90px">Status</th>
+                <th>Document</th>
+                <th style="width:200px">Primary issue</th>
+                <th style="width:80px">Owner</th>
+                <th style="width:80px">Due</th>
+                <th style="width:100px">Workflow</th>
+                <th style="width:160px">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="resultsEmpty" style="display:none">
+          <div class="icon">&#128196;</div>
+          No documents found in this scan.
+        </div>
+      </div>
+
+      <!-- Review Queue Tab -->
+      <div class="tab-panel" id="tabQueue" role="tabpanel">
+        <div class="queue-toolbar" id="queueToolbar">
+          <div class="queue-counts" id="queueCounts"></div>
+        </div>
+        <div id="queueBody"></div>
+        <div class="empty-state" id="queueEmpty" style="display:none">
+          <div class="icon">&#9745;</div>
+          No findings to review. All clear!
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="welcomeCard">
+      <div class="empty-state">
+        <div class="icon">&#128269;</div>
+        <span id="welcomeMsg">Run a scan to analyze your documentation for staleness.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- History Sidebar -->
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <span>Scan History</span>
+        <span class="clear-icon" id="clearHistoryBtn" title="Clear scan history" onclick="clearHistory()">&#128465;</span>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <ul class="timeline" id="historyTimeline" style="display:none"></ul>
+        <div class="empty-state" id="historyEmpty">
+          <div class="icon">&#128197;</div>
+          No scans yet.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Report Overlay -->
+<div class="report-overlay" id="reportOverlay" role="dialog" aria-modal="true" aria-labelledby="reportTitle" onclick="if(event.target===this)closeReport()">
+  <div class="report-panel">
+    <div class="report-panel-header">
+      <h2 id="reportTitle">Flagged Content Report</h2>
+      <button class="close-btn" id="reportCloseBtn" onclick="closeReport()" aria-label="Close report">&times;</button>
+    </div>
+    <div class="report-panel-body" id="reportBody"></div>
+    <div class="report-panel-footer">
+      <button class="btn-outline" onclick="downloadReport('json')">Download JSON</button>
+      <button class="btn-outline" onclick="downloadReport('text')">Download Text</button>
+    </div>
+  </div>
+</div>
+
+<!-- Finding Detail Overlay -->
+<div class="detail-overlay" id="detailOverlay" role="dialog" aria-modal="true" aria-labelledby="detailTitle" onclick="if(event.target===this)closeDetail()">
+  <div class="detail-panel">
+    <div class="detail-panel-header">
+      <h2 id="detailTitle">Finding Detail</h2>
+      <button class="close-btn" id="detailCloseBtn" onclick="closeDetail()" aria-label="Close finding detail">&times;</button>
+    </div>
+    <div class="detail-panel-body" id="detailBody"></div>
+    <div class="detail-panel-footer">
+      <div id="detailError" style="color:var(--red,#e53e3e);font-size:13px;flex:1;display:none"></div>
+      <button class="btn btn-sm btn-outline" onclick="closeDetail()">Close</button>
+      <button class="btn btn-sm btn-primary" id="detailSaveBtn" onclick="saveDetail()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Result Detail Drawer -->
+<div class="result-drawer-backdrop" id="resultDrawerBackdrop" onclick="closeResultDrawer()"></div>
+<div class="result-drawer" id="resultDrawer" role="dialog" aria-modal="true" aria-labelledby="resultDrawerTitle">
+  <div class="result-drawer-header">
+    <h2 id="resultDrawerTitle">Document Detail</h2>
+    <button class="close-btn" id="drawerCloseBtn" onclick="closeResultDrawer()" aria-label="Close document detail">&times;</button>
+  </div>
+  <div class="result-drawer-body" id="resultDrawerBody"></div>
+</div>
+
+<!-- Action modal (Snooze / Dismiss quick actions) -->
+<div class="action-modal-backdrop" id="actionModalBackdrop"></div>
+<div class="action-modal" id="actionModal" role="dialog" aria-modal="true" aria-labelledby="actionModalTitle" style="display:none">
+  <div class="action-modal-header">
+    <h3 id="actionModalTitle">Action</h3>
+    <button class="close-btn" id="actionModalClose" onclick="closeActionModal()" aria-label="Cancel">&times;</button>
+  </div>
+  <div class="action-modal-body" id="actionModalBody"></div>
+  <div class="action-modal-footer">
+    <div id="actionModalError" class="action-modal-error" role="alert" style="display:none"></div>
+    <button class="btn btn-sm btn-outline" id="actionModalCancel" onclick="closeActionModal()">Cancel</button>
+    <button class="btn btn-sm btn-primary" id="actionModalConfirm" onclick="submitActionModal()">Confirm</button>
+  </div>
+</div>
+
+<script>
+  let pollTimer = null;
+  let activeScanId = null;
+  let currentScanData = null;
+  let activeQueueFilter = null;
+  let activeDetailKey = null;
+  let sourceConfigured = false;
+  let demoMode = false;
+  let currentSource = null;
+  let lastStatus = null;
+  let activeResultFilter = 'actionable';
+  let activeResultSort = 'risk';
+  let _detailLastFocus = null;
+  let _drawerLastFocus = null;
+  let _reportLastFocus = null;
+  let _actionModalPendingKey = null;
+  let _actionModalPendingState = null;
+  let _actionModalLastFocus = null;
+  const _inFlight = new Set(); // finding keys with a PATCH in progress
+
+  const SCOPE_CONFIGS = {
+    notion: [
+      { value: 'configured', label: 'Use saved settings', target: null,
+        helper: 'Uses the source and scan target already configured for this workspace.' },
+      { value: 'page_tree',  label: 'Scan a section',
+        target: { label: 'Page URL or ID', placeholder: 'Enter a page URL or page ID' },
+        helper: 'Scans this page and its child pages from the active source.' },
+      { value: 'database',   label: 'Scan a collection',
+        target: { label: 'Collection ID or key', placeholder: 'Enter a database ID, space key, or collection URL' },
+        helper: 'Scans the selected database from the active source.' },
+      { value: 'query',      label: 'Find pages',
+        target: { label: 'Search', placeholder: 'Enter a page title, keyword, or URL' },
+        helper: 'Finds pages matching the search text or URL.' },
+    ],
+    confluence: [
+      { value: 'configured', label: 'Use saved settings', target: null,
+        helper: 'Uses the source and scan target already configured for this workspace.' },
+      { value: 'space',      label: 'Scan a collection',
+        target: { label: 'Collection ID or key', placeholder: 'Enter a database ID, space key, or collection URL' },
+        helper: 'Scans the selected space from the active source.' },
+      { value: 'page_tree',  label: 'Scan a section',
+        target: { label: 'Page URL or ID', placeholder: 'Enter a page URL or page ID' },
+        helper: 'Scans this page and its child pages from the active source.' },
+      { value: 'cql',        label: 'Advanced search',
+        target: { label: 'Query', placeholder: 'Enter an advanced search query' },
+        helper: 'Runs an advanced search supported by the active source.' },
+    ],
+  };
+
+  const WORKFLOW_STATES = ['open', 'acknowledged', 'dismissed', 'fixed', 'snoozed', 'accepted_risk'];
+
+  const STATE_LABELS = {
+    open: 'Open',
+    acknowledged: 'Acknowledged',
+    dismissed: 'Dismissed',
+    fixed: 'Fixed',
+    snoozed: 'Snoozed',
+    accepted_risk: 'Accepted Risk',
+  };
+
+  const STATE_PILL_CLS = {
+    open: 'pill-open',
+    acknowledged: 'pill-acknowledged',
+    dismissed: 'pill-dismissed',
+    fixed: 'pill-fixed',
+    snoozed: 'pill-snoozed',
+    accepted_risk: 'pill-accepted_risk',
+  };
+
+  const RISK_ORDER = { stale: 0, needs_review: 1, unknown: 2, current: 3 };
+
+  function isResultActionable(r) {
+    // current documents never require review
+    if (r.overall_status === 'current') return false;
+    // stale, needs_review, and unknown all require human review
+    if (!r.workflow) return true;  // no finding yet — not yet triaged
+    return r.workflow.is_actionable === true;
+  }
+
+  function getResultPrimaryIssue(r) {
+    const ev = r.trust_evidence || {};
+    if (ev.summary) return ev.summary;
+    const risks = ev.review_risks || [];
+    if (risks.length) return risks[0];
+    const missing = ev.missing_evidence || [];
+    if (missing.length) return 'Missing: ' + missing[0];
+    if (r.overall_status === 'stale') return 'Document may be outdated.';
+    if (r.overall_status === 'needs_review') return 'Review required.';
+    if (r.overall_status === 'unknown') return 'Verify this document is still current.';
+    return '';
+  }
+
+  function getResultOwner(r) {
+    return (r.workflow && r.workflow.assigned_owner) || (r.trust_metadata && r.trust_metadata.owner) || null;
+  }
+
+  function getResultDueDate(r) {
+    return (r.workflow && r.workflow.due_date) || null;
+  }
+
+  function getResultWorkflowState(r) {
+    return (r.workflow && r.workflow.state) || null;
+  }
+
+  function isDemoUrl(url) {
+    try { return !!url && new URL(url).hostname === 'demo.example'; } catch (_) { return false; }
+  }
+
+  function applyResultFilterAndSort(results) {
+    let filtered = results;
+    switch (activeResultFilter) {
+      case 'actionable': filtered = results.filter(isResultActionable); break;
+      case 'stale': filtered = results.filter(r => r.overall_status === 'stale'); break;
+      case 'needs_review': filtered = results.filter(r => r.overall_status === 'needs_review'); break;
+      case 'unknown': filtered = results.filter(r => r.overall_status === 'unknown'); break;
+      case 'current': filtered = results.filter(r => r.overall_status === 'current'); break;
+    }
+    const sorted = filtered.slice();
+    switch (activeResultSort) {
+      case 'risk':
+        sorted.sort((a, b) => {
+          const rd = (RISK_ORDER[a.overall_status] != null ? RISK_ORDER[a.overall_status] : 4)
+            - (RISK_ORDER[b.overall_status] != null ? RISK_ORDER[b.overall_status] : 4);
+          if (rd !== 0) return rd;
+          return (a.confidence != null ? a.confidence : 1) - (b.confidence != null ? b.confidence : 1);
+        });
+        break;
+      case 'confidence':
+        sorted.sort((a, b) => (a.confidence != null ? a.confidence : 1) - (b.confidence != null ? b.confidence : 1));
+        break;
+      case 'oldest_reviewed':
+        sorted.sort((a, b) => {
+          const da = (a.trust_metadata && a.trust_metadata.last_reviewed) || '0000-00-00';
+          const db = (b.trust_metadata && b.trust_metadata.last_reviewed) || '0000-00-00';
+          return da < db ? -1 : da > db ? 1 : 0;
+        });
+        break;
+      case 'recently_changed':
+        sorted.sort((a, b) => {
+          const da = a.last_modified || '0000-00-00T00:00:00';
+          const db = b.last_modified || '0000-00-00T00:00:00';
+          return da < db ? 1 : da > db ? -1 : 0;
+        });
+        break;
+      case 'title':
+        sorted.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+        break;
+    }
+    return sorted;
+  }
+
+  function renderResultsToolbar(results) {
+    const el = document.getElementById('resultsToolbar');
+    if (!el) return;
+    const stale = results.filter(r => r.overall_status === 'stale').length;
+    const needsReview = results.filter(r => r.overall_status === 'needs_review').length;
+    const unknown = results.filter(r => r.overall_status === 'unknown').length;
+    const current = results.filter(r => r.overall_status === 'current').length;
+    const actionable = results.filter(isResultActionable).length;
+
+    const filters = [
+      { key: 'actionable', label: 'Actionable', count: actionable },
+      { key: 'stale', label: 'Stale', count: stale },
+      { key: 'needs_review', label: 'Needs review', count: needsReview },
+      { key: 'unknown', label: 'Unknown', count: unknown },
+      { key: 'current', label: 'Current', count: current },
+      { key: 'all', label: 'All', count: results.length },
+    ];
+
+    const chipsHtml = filters.map(f => {
+      const active = activeResultFilter === f.key ? ' active' : '';
+      return `<button class="filter-chip${active}" data-filter="${f.key}" onclick="setResultFilter('${f.key}')">${f.label} (${f.count})</button>`;
+    }).join('');
+
+    const sortHtml = `<select class="results-sort" onchange="setResultSort(this.value)">
+      <option value="risk"${activeResultSort === 'risk' ? ' selected' : ''}>Highest risk first</option>
+      <option value="confidence"${activeResultSort === 'confidence' ? ' selected' : ''}>Lowest confidence first</option>
+      <option value="oldest_reviewed"${activeResultSort === 'oldest_reviewed' ? ' selected' : ''}>Oldest reviewed first</option>
+      <option value="recently_changed"${activeResultSort === 'recently_changed' ? ' selected' : ''}>Recently changed</option>
+      <option value="title"${activeResultSort === 'title' ? ' selected' : ''}>Title</option>
+    </select>`;
+
+    el.innerHTML = chipsHtml + sortHtml;
+    el.style.display = '';
+  }
+
+  function renderResultsTable() {
+    if (!currentScanData) return;
+    const results = currentScanData.results || [];
+    const filtered = applyResultFilterAndSort(results);
+    const tbody = document.getElementById('resultsBody');
+    const emptyEl = document.getElementById('resultsEmpty');
+
+    if (!filtered.length) {
+      tbody.innerHTML = '';
+      emptyEl.style.display = '';
+      return;
+    }
+    emptyEl.style.display = 'none';
+
+    const STATUS_MAP = {
+      stale: { cls: 'pill-stale', label: 'Stale' },
+      needs_review: { cls: 'pill-needs-review', label: 'Needs Review' },
+      unknown: { cls: 'pill-unknown', label: 'Unknown' },
+      current: { cls: 'pill-current', label: 'Current' },
+    };
+
+    tbody.innerHTML = filtered.map(r => {
+      const st = STATUS_MAP[r.overall_status] || STATUS_MAP.unknown;
+      const titlePart = (r.url && !isDemoUrl(r.url))
+        ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.title)}</a>`
+        : escapeHtml(r.title);
+      const lastReviewed = r.trust_metadata && r.trust_metadata.last_reviewed;
+      const modified = r.last_modified ? r.last_modified.substring(0, 10) : null;
+      const dateMeta = lastReviewed
+        ? `<div class="doc-meta">Reviewed ${escapeHtml(lastReviewed)}</div>`
+        : (modified ? `<div class="doc-meta">Modified ${modified}</div>` : '');
+
+      const primaryIssue = escapeHtml(getResultPrimaryIssue(r));
+      const owner = getResultOwner(r);
+      const due = getResultDueDate(r);
+      const ws = getResultWorkflowState(r);
+      const wsPillCls = ws ? (STATE_PILL_CLS[ws] || 'pill-unknown') : '';
+      const wsLabel = ws ? (STATE_LABELS[ws] || ws) : '';
+
+      let actionsHtml = `<button class="act-btn" onclick="event.stopPropagation();openResultDetail('${escapeHtml(r.id)}')">Details</button>`;
+      const fk = r.workflow && r.workflow.finding_key;
+      if (fk) {
+        if (!ws || ws === 'open') {
+          actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','acknowledged')">Acknowledge</button>`;
+          actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
+        } else if (ws === 'acknowledged') {
+          actionsHtml += ` <button class="act-btn act-btn-success" onclick="event.stopPropagation();quickResultAction(this,'${fk}','fixed')">Fixed</button>`;
+          actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
+        } else {
+          actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','open')">Reopen</button>`;
+        }
+      }
+
+      return `<tr style="cursor:pointer" tabindex="0" data-doc-id="${escapeHtml(r.id)}" onclick="openResultDetail('${escapeHtml(r.id)}')">
+        <td><span class="pill ${st.cls}">${st.label}</span></td>
+        <td class="doc-title">${titlePart}${dateMeta}</td>
+        <td class="reason-cell">${primaryIssue || '\u2014'}</td>
+        <td style="white-space:nowrap;color:var(--text-secondary);font-size:13px">${owner ? escapeHtml(owner) : '\u2014'}</td>
+        <td style="white-space:nowrap;color:var(--text-secondary);font-size:13px">${due ? escapeHtml(due) : '\u2014'}</td>
+        <td>${ws ? `<span class="pill ${wsPillCls}" style="font-size:11px">${wsLabel}</span>` : '\u2014'}</td>
+        <td style="white-space:nowrap">${actionsHtml}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function setResultFilter(filter) {
+    activeResultFilter = filter;
+    document.querySelectorAll('.filter-chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.filter === filter);
+    });
+    renderResultsTable();
+  }
+
+  function setResultSort(sort) {
+    activeResultSort = sort;
+    renderResultsTable();
+  }
+
+  async function init() {
+    await loadHistory();
+    const status = await fetchJSON('/api/status');
+    lastStatus = status;
+    sourceConfigured = status.configured;
+    applySourceConfig(status);
+    if (status.demo_mode) {
+      const msg = document.getElementById('welcomeMsg');
+      if (msg) msg.textContent = 'Run the demo scan to analyze 10 sample knowledge-base pages.';
+    }
+    if (status.scan_in_progress) {
+      setScanningState(true);
+      pollForCompletion();
+    }
+  }
+
+  function applySourceConfig(status) {
+    demoMode = status.demo_mode || false;
+
+    // Header badge — source label, "Demo workspace", or "Not configured"
+    document.getElementById('sourceBadge').textContent = status.source_label || 'Not configured';
+
+    currentSource = status.source || null;
+
+    if (demoMode) {
+      // Demo mode: hide all scope controls; the scan targets the fixed demo pages
+      document.getElementById('scopeSelect').closest('.field').style.display = 'none';
+      document.getElementById('scopeTargetField').style.display = 'none';
+      const infoEl2 = document.getElementById('sourceInfo');
+      infoEl2.textContent = '';
+      infoEl2.style.display = 'none';
+      document.getElementById('scanBtn').disabled = false;
+      document.getElementById('scanBtn').textContent = 'Run demo scan';
+      return;
+    }
+
+    // Restore sourceInfo visibility for non-demo mode
+    document.getElementById('sourceInfo').style.display = '';
+
+    // Populate scope selector
+    const scopeEl = document.getElementById('scopeSelect');
+    scopeEl.innerHTML = '';
+    document.getElementById('scopeSelect').closest('.field').style.display = '';
+    if (status.source && SCOPE_CONFIGS[status.source]) {
+      SCOPE_CONFIGS[status.source].forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.value;
+        opt.textContent = s.label;
+        scopeEl.appendChild(opt);
+      });
+      // Restore saved scan mode only — do not restore target to avoid stale pre-populated values
+      const savedScope = loadSavedScope();
+      if (savedScope && scopeEl.querySelector(`option[value="${savedScope.scope_type}"]`)) {
+        scopeEl.value = savedScope.scope_type;
+      }
+    } else {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No source configured';
+      scopeEl.appendChild(opt);
+    }
+
+    // Configuration error banner — cleared when source is configured
+    const infoEl = document.getElementById('sourceInfo');
+    if (!status.configured) {
+      infoEl.innerHTML =
+        '<span style="color:var(--red)">\u26a0 ' +
+        escapeHtml(status.configuration_error || 'No source configured.') +
+        '</span>';
+    } else {
+      infoEl.textContent = '';
+    }
+
+    // Render the target field and mode helper for the current selection
+    renderScopeTargetField();
+  }
+
+  function getConfiguredScopeHint(status) {
+    if (status.source === 'confluence' && status.target) {
+      const t = status.target;
+      const parts = [t.base_url];
+      if (t.space_key) parts.push('Space: ' + t.space_key);
+      if (t.page_id) parts.push('Page: ' + t.page_id);
+      return parts.join(' \xb7 ');
+    }
+    if (status.source === 'notion' && status.target) {
+      const t = status.target;
+      if (t.root_page_id) return 'Root page: ' + t.root_page_id;
+      if (t.database_id) return 'Database: ' + t.database_id;
+      return 'Accessible shared pages';
+    }
+    return '';
+  }
+
+  function getCurrentScopeConfig() {
+    if (!currentSource || !SCOPE_CONFIGS[currentSource]) return null;
+    const scopeEl = document.getElementById('scopeSelect');
+    return SCOPE_CONFIGS[currentSource].find(s => s.value === scopeEl.value) || null;
+  }
+
+  function renderScopeTargetField() {
+    const cfg = getCurrentScopeConfig();
+    const field = document.getElementById('scopeTargetField');
+    const label = document.getElementById('scopeTargetLabel');
+    const input = document.getElementById('scopeTarget');
+    if (cfg && cfg.target) {
+      label.textContent = cfg.target.label;
+      input.placeholder = cfg.target.placeholder || '';
+      field.style.display = '';
+    } else {
+      field.style.display = 'none';
+      input.value = '';
+    }
+    updateScopeHelper();
+  }
+
+  function updateScopeHelper() {
+    const infoEl = document.getElementById('sourceInfo');
+    if (!infoEl || !sourceConfigured) return;
+    const cfg = getCurrentScopeConfig();
+    if (!cfg) return;
+    // For "Use saved settings", show the configured connection details as context
+    if (cfg.value === 'configured' && lastStatus) {
+      const hint = getConfiguredScopeHint(lastStatus);
+      infoEl.textContent = hint || cfg.helper || '';
+    } else {
+      infoEl.textContent = cfg.helper || '';
+    }
+  }
+
+  function onScopeChange() {
+    document.getElementById('scopeTarget').value = '';
+    renderScopeTargetField();
+    saveScope();
+    document.getElementById('scanBtn').disabled = !isScanReady();
+  }
+
+  function onScopeTargetInput() {
+    saveScope();
+    document.getElementById('scanBtn').disabled = !isScanReady();
+  }
+
+  function isScanReady() {
+    if (demoMode) return true;
+    if (!sourceConfigured) return false;
+    const cfg = getCurrentScopeConfig();
+    if (!cfg) return false;
+    // Scopes with a required target field need a non-empty value
+    if (cfg.target) {
+      const val = document.getElementById('scopeTarget').value.trim();
+      if (!val) return false;
+    }
+    return true;
+  }
+
+  function saveScope() {
+    if (!currentSource) return;
+    const scopeEl = document.getElementById('scopeSelect');
+    try {
+      localStorage.setItem('kb_audit_scope_' + currentSource, JSON.stringify({
+        scope_type: scopeEl.value,
+      }));
+    } catch (_) {}
+  }
+
+  function loadSavedScope() {
+    if (!currentSource) return null;
+    try {
+      const raw = localStorage.getItem('kb_audit_scope_' + currentSource);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+
+  async function fetchJSON(url, opts) {
+    let res;
+    try {
+      res = await fetch(url, opts);
+    } catch (_) {
+      throw new Error('Network error \u2014 check your connection.');
+    }
+    let data = null;
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) {
+      const msg = (data && typeof data.error === 'string') ? data.error
+        : (data && typeof data.detail === 'string') ? data.detail
+        : `Request failed (HTTP ${res.status})`;
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  function showToast(message, type) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    container.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('toast-visible'));
+    setTimeout(() => {
+      toast.classList.remove('toast-visible');
+      toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    }, 4000);
+  }
+
+  async function startScan() {
+    const scopeCfg = getCurrentScopeConfig();
+    const targetVal = document.getElementById('scopeTarget').value.trim() || null;
+    const scopeEl = document.getElementById('scopeSelect');
+    const scopeType = scopeEl.value || null;
+
+    // Build scope-aware payload
+    const payload = { scope_type: scopeType };
+    if (scopeCfg && scopeCfg.target && targetVal) {
+      if (currentSource === 'notion') {
+        if (scopeType === 'page_tree') payload.root_page = targetVal;
+        else if (scopeType === 'database') payload.database_id = targetVal;
+        else if (scopeType === 'query') payload.query = targetVal;
+      } else if (currentSource === 'confluence') {
+        if (scopeType === 'space') payload.confluence_space = targetVal;
+        else if (scopeType === 'page_tree') payload.confluence_page_id = targetVal;
+        else if (scopeType === 'cql') payload.query = targetVal;
+      }
+    }
+
+    setScanningState(true);
+    const statusText = document.getElementById('statusText');
+    statusText.textContent = '';
+    statusText.style.color = '';
+
+    try {
+      await fetchJSON('/api/scans', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      statusText.textContent = err.message;
+      statusText.style.color = 'var(--red)';
+      setScanningState(false);
+      return;
+    }
+
+    pollForCompletion();
+  }
+
+  function setScanningState(scanning) {
+    const btn = document.getElementById('scanBtn');
+    const spinner = document.getElementById('spinner');
+    const statusText = document.getElementById('statusText');
+
+    btn.disabled = scanning || !isScanReady();
+    btn.textContent = scanning ? 'Scanning...' : (demoMode ? 'Run demo scan' : 'Run Scan');
+    spinner.classList.toggle('active', scanning);
+    if (scanning) {
+      statusText.textContent = 'Scanning pages...';
+    }
+  }
+
+  function pollForCompletion() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      let status;
+      try { status = await fetchJSON('/api/status'); } catch (_) { return; }
+      if (!status.scan_in_progress) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        setScanningState(false);
+        if (status.scan_error) {
+          document.getElementById('statusText').textContent = 'Error: ' + status.scan_error;
+          document.getElementById('statusText').style.color = 'var(--red)';
+        } else {
+          document.getElementById('statusText').textContent = 'Scan complete';
+          document.getElementById('statusText').style.color = '';
+          await loadHistory();
+          if (status.last_scan_id) {
+            await loadScanResults(status.last_scan_id);
+          }
+        }
+      }
+    }, 2000);
+  }
+
+  // --- Tab Navigation ---
+
+  function switchTab(tabId) {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      const isActive = btn.dataset.tab === tabId;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+      panel.classList.toggle('active', panel.id === 'tab' + tabId.charAt(0).toUpperCase() + tabId.slice(1));
+    });
+    // Refresh queue data when switching to it
+    if (tabId === 'queue' && activeScanId) {
+      loadQueueData();
+    }
+  }
+
+  // --- History ---
+
+  async function loadHistory() {
+    let scans;
+    try { scans = await fetchJSON('/api/scans'); } catch (_) { return []; }
+    const timeline = document.getElementById('historyTimeline');
+    const empty = document.getElementById('historyEmpty');
+
+    if (!scans.length) {
+      timeline.style.display = 'none';
+      empty.style.display = '';
+      return scans;
+    }
+
+    timeline.style.display = '';
+    empty.style.display = 'none';
+
+    const items = [];
+    let unchangedGroup = [];
+
+    for (const s of scans) {
+      const hasChanges = s.changes && s.changes.length > 0;
+      const isFirst = s.changes === null;
+      const isActive = s.scan_id === activeScanId;
+
+      if (!hasChanges && !isFirst && !isActive) {
+        unchangedGroup.push(s);
+      } else {
+        if (unchangedGroup.length > 0) {
+          items.push({ type: 'group', scans: [...unchangedGroup] });
+          unchangedGroup = [];
+        }
+        items.push({ type: 'scan', scan: s });
+      }
+    }
+    if (unchangedGroup.length > 0) {
+      items.push({ type: 'group', scans: unchangedGroup });
+    }
+
+    timeline.innerHTML = items.map(item => {
+      if (item.type === 'group') {
+        const ids = item.scans.map(s => s.scan_id);
+        const label = item.scans.length === 1
+          ? `Scan #${ids[0]} \u2014 no changes`
+          : `${item.scans.length} scans with no changes (#${ids[ids.length - 1]}\u2013#${ids[0]})`;
+        return `<li class="timeline-group">
+          <span class="timeline-group-label" onclick="loadScanResults(${ids[0]})">${label}</span>
+        </li>`;
+      }
+
+      const s = item.scan;
+      const date = s.started_at ? s.started_at.substring(0, 16).replace('T', ' ') : '';
+      const active = s.scan_id === activeScanId ? ' active' : '';
+      const hasChanges = s.changes && s.changes.length > 0;
+
+      let changesHtml = '';
+      if (s.changes === null) {
+        changesHtml = `<div class="timeline-stats">
+          <span>${s.document_count} docs</span>
+          <span style="color:var(--red)">${s.stale_count} stale</span>
+          ${s.needs_review_count ? `<span style="color:var(--amber)">${s.needs_review_count} review</span>` : ''}
+        </div>`;
+      } else if (hasChanges) {
+        changesHtml = '<ul class="timeline-changes">' + s.changes.map(c => {
+          let cls = '';
+          if (c.includes('stale')) cls = 'change-stale';
+          else if (c.includes('review')) cls = 'change-needs-review';
+          else if (c.includes('current')) cls = 'change-current';
+          else if (c.includes('added')) cls = 'change-added';
+          return `<li class="${cls}">${escapeHtml(c)}</li>`;
+        }).join('') + '</ul>';
+      } else {
+        changesHtml = '<div class="timeline-no-changes">No changes</div>';
+      }
+
+      return `<li class="timeline-item${active}${hasChanges ? ' has-changes' : ''}" onclick="loadScanResults(${s.scan_id})">
+        <div class="timeline-header">Scan #${s.scan_id}</div>
+        <div class="timeline-date">${date}</div>
+        ${changesHtml}
+      </li>`;
+    }).join('');
+    return scans;
+  }
+
+  // --- Scan Results ---
+
+  async function loadScanResults(scanId) {
+    activeScanId = scanId;
+    await loadHistory();
+
+    const data = await fetchJSON(`/api/scans/${scanId}`);
+    currentScanData = data;
+    const results = data.results || [];
+
+    document.getElementById('welcomeCard').style.display = 'none';
+    const card = document.getElementById('mainCard');
+    card.style.display = '';
+
+    const header = document.getElementById('mainHeader');
+    const scanDate = data.scan?.started_at?.substring(0, 16).replace('T', ' ') || '';
+    header.textContent = `Scan #${scanId} \u2014 ${scanDate}`;
+
+    const tbody = document.getElementById('resultsBody');
+    const emptyEl = document.getElementById('resultsEmpty');
+    const summaryBar = document.getElementById('summaryBar');
+    const currentCard = document.getElementById('currentCard');
+
+    // Update tab counts
+    const stale = results.filter(r => r.overall_status === 'stale').length;
+    const needsReview = results.filter(r => r.overall_status === 'needs_review').length;
+    const unknown = results.filter(r => r.overall_status === 'unknown').length;
+    const current = results.length - stale - needsReview - unknown;
+
+    document.getElementById('tabCountResults').textContent = results.length;
+
+    // Queue count from workflow_summary (actionable only)
+    const wfSummary = data.workflow_summary || {};
+    const actionableTotal = Object.values(wfSummary).reduce((a, b) => a + b, 0);
+    const queueCountEl = document.getElementById('tabCountQueue');
+    queueCountEl.textContent = actionableTotal;
+    queueCountEl.classList.toggle('tab-count-red', actionableTotal > 0);
+
+    if (!results.length) {
+      tbody.innerHTML = '';
+      emptyEl.style.display = '';
+      summaryBar.style.display = 'none';
+      currentCard.style.display = 'none';
+      document.getElementById('changesCard').style.display = 'none';
+      document.getElementById('reportBtn').style.display = 'none';
+      return;
+    }
+
+    emptyEl.style.display = 'none';
+    summaryBar.style.display = '';
+
+    summaryBar.innerHTML = `
+      <span class="stat">${results.length} documents</span>
+      <span class="stat"><span class="dot dot-green"></span>${current} current</span>
+      <span class="stat"><span class="dot dot-red"></span>${stale} stale</span>
+      <span class="stat"><span class="dot dot-amber"></span>${needsReview} needs review</span>
+      <span class="stat"><span class="dot dot-gray"></span>${unknown} unknown</span>
+    `;
+
+    // Changes since last scan
+    const changesCard = document.getElementById('changesCard');
+    const changes = data.changes || [];
+    if (!data.has_previous) {
+      changesCard.style.display = 'none';
+    } else if (changes.length > 0) {
+      const items = changes.map(c => {
+        let description;
+        if (!c.old_status) {
+          description = `<strong>${escapeHtml(c.title)}</strong> added (${c.new_status})`;
+        } else if (c.new_status === 'stale') {
+          description = `<strong>${escapeHtml(c.title)}</strong> became stale`;
+        } else if (c.new_status === 'needs_review') {
+          description = `<strong>${escapeHtml(c.title)}</strong> needs review`;
+        } else if (c.new_status === 'current') {
+          description = `<strong>${escapeHtml(c.title)}</strong> became current`;
+        } else {
+          description = `<strong>${escapeHtml(c.title)}</strong> changed to ${c.new_status}`;
+        }
+        return `<li>${description}</li>`;
+      });
+      changesCard.innerHTML = `
+        <div class="changes-label">Changes since last scan</div>
+        <ul>${items.join('')}</ul>
+      `;
+      changesCard.style.display = '';
+    } else {
+      changesCard.innerHTML = `
+        <div class="changes-label">Changes since last scan</div>
+        <span class="no-changes">No changes detected</span>
+      `;
+      changesCard.style.display = '';
+    }
+
+    const reportBtn = document.getElementById('reportBtn');
+    const flaggedCount = stale + needsReview + unknown;
+    if (flaggedCount > 0) {
+      reportBtn.textContent = 'Review Report (' + flaggedCount + ')';
+      reportBtn.style.display = '';
+      reportBtn.disabled = false;
+    } else {
+      reportBtn.style.display = 'none';
+    }
+
+    // Recommended documents highlight card
+    const currentDocs = results.filter(r => r.overall_status === 'current')
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+    if (currentDocs.length > 0) {
+      const items = currentDocs.map(doc => {
+        const confPct = Math.round((doc.confidence || 0) * 100);
+        const link = (doc.url && !isDemoUrl(doc.url))
+          ? `<a href="${escapeHtml(doc.url)}" target="_blank" rel="noopener">${escapeHtml(doc.title)}</a>`
+          : escapeHtml(doc.title);
+        const lastReviewed = doc.trust_metadata?.last_reviewed;
+        const dateStr = lastReviewed ? `Last reviewed: ${lastReviewed}` : 'Last reviewed: unknown';
+        const posEvidence = doc.trust_evidence?.positive_evidence || [];
+        const bullets = posEvidence.slice(0, 4)
+          .map(p => `<li>${escapeHtml(p)}</li>`).join('');
+
+        return `<div class="current-version-title">${link}</div>
+          <div class="current-version-meta">
+            <span>${dateStr}</span>
+            <span>Confidence: ${confPct}%</span>
+          </div>
+          <ul class="current-version-evidence">${bullets}</ul>`;
+      }).join('');
+      currentCard.innerHTML = `
+        <div class="current-version-label">Recommended Documents</div>
+        ${items}
+      `;
+      currentCard.style.display = '';
+    } else {
+      currentCard.style.display = 'none';
+    }
+
+    // Reset to actionable filter for new scan loads
+    activeResultFilter = 'actionable';
+    activeResultSort = 'risk';
+    renderResultsToolbar(results);
+    renderResultsTable();
+
+    // Also preload queue data
+    loadQueueData();
+  }
+
+  // --- Review Queue ---
+
+  async function loadQueueData() {
+    if (!activeScanId) return;
+
+    // Build the findings request
+    const params = new URLSearchParams({ scan_id: activeScanId });
+    if (activeQueueFilter === '_all') {
+      params.set('include_all', 'true');
+    } else if (activeQueueFilter) {
+      params.set('state', activeQueueFilter);
+      params.set('include_all', 'true');
+    }
+
+    try {
+      const findings = await fetchJSON(`/api/findings?${params}`);
+      const actionableSummary = await fetchJSON(`/api/findings/summary?scan_id=${activeScanId}`);
+      const allSummary = await fetchJSON(`/api/findings/summary?scan_id=${activeScanId}&include_all=true`);
+      renderQueueCounts(actionableSummary, allSummary);
+      renderQueueRows(findings);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  function renderQueueCounts(actionableSummary, allSummary) {
+    const el = document.getElementById('queueCounts');
+    const actionableTotal = Object.values(actionableSummary).reduce((a, b) => a + b, 0);
+    const allTotal = Object.values(allSummary).reduce((a, b) => a + b, 0);
+
+    const chips = [
+      { key: null, label: 'Actionable', count: actionableTotal },
+      { key: 'open', label: 'Open', count: allSummary.open || 0 },
+      { key: 'acknowledged', label: 'Acknowledged', count: allSummary.acknowledged || 0 },
+      { key: 'snoozed', label: 'Snoozed', count: allSummary.snoozed || 0 },
+      { key: 'fixed', label: 'Fixed', count: allSummary.fixed || 0 },
+      { key: 'dismissed', label: 'Dismissed', count: allSummary.dismissed || 0 },
+      { key: 'accepted_risk', label: 'Accepted Risk', count: allSummary.accepted_risk || 0 },
+      { key: '_all', label: 'All', count: allTotal },
+    ].filter(c => c.count > 0 || c.key === null || c.key === '_all');
+
+    el.innerHTML = chips.map(c => {
+      const active = activeQueueFilter === c.key ? ' active' : '';
+      const onclick = c.key === null
+        ? `onclick="setQueueFilter(null)"`
+        : `onclick="setQueueFilter('${c.key}')"`;
+      return `<span class="queue-count-chip${active}" ${onclick}>${c.label} (${c.count})</span>`;
+    }).join('');
+
+    // Tab badge = actionable count
+    const queueCountEl = document.getElementById('tabCountQueue');
+    queueCountEl.textContent = actionableTotal;
+    queueCountEl.classList.toggle('tab-count-red', actionableTotal > 0);
+  }
+
+  function setQueueFilter(state) {
+    activeQueueFilter = state;
+    loadQueueData();
+  }
+
+  function renderQueueRows(findings) {
+    const body = document.getElementById('queueBody');
+    const empty = document.getElementById('queueEmpty');
+
+    if (!findings.length) {
+      body.innerHTML = '';
+      empty.style.display = '';
+      return;
+    }
+
+    empty.style.display = 'none';
+
+    body.innerHTML = findings.map(f => {
+      const ws = f.workflow_state;
+      const pillCls = STATE_PILL_CLS[ws] || 'pill-unknown';
+      const pillLabel = STATE_LABELS[ws] || ws;
+      const ctx = f.audit_context;
+
+      // Trust status badge
+      const STATUS_MAP = {
+        'stale': { cls: 'pill-stale', label: 'Stale' },
+        'needs_review': { cls: 'pill-needs-review', label: 'Needs Review' },
+        'current': { cls: 'pill-current', label: 'Current' },
+        'unknown': { cls: 'pill-unknown', label: 'Unknown' },
+      };
+      const trustSt = ctx ? (STATUS_MAP[ctx.overall_status] || null) : null;
+      const trustBadge = trustSt
+        ? `<span class="pill ${trustSt.cls}" style="font-size:11px">${trustSt.label}</span>`
+        : '';
+
+      // Confidence
+      const confPct = ctx ? Math.round((ctx.confidence || 0) * 100) : null;
+      const confStr = confPct !== null ? `${confPct}%` : '';
+
+      const metaParts = [];
+      if (f.source_type) metaParts.push(escapeHtml(capitalize(f.source_type)));
+      if (confStr) metaParts.push(`Confidence: ${confStr}`);
+      if (f.assigned_owner) metaParts.push(`Owner: ${escapeHtml(f.assigned_owner)}`);
+      else metaParts.push('Unassigned');
+      if (f.due_date) metaParts.push(`Due: ${escapeHtml(f.due_date)}`);
+      if (f.snoozed_until && ws === 'snoozed') metaParts.push(`Snoozed until: ${escapeHtml(f.snoozed_until)}`);
+
+      // Evidence summary line
+      const evidenceSummary = ctx?.trust_evidence?.summary || '';
+      const recommendedAction = ctx?.trust_evidence?.recommended_action || '';
+      let summaryLine = '';
+      if (evidenceSummary) {
+        summaryLine = `<div class="queue-row-meta" style="margin-top:2px">${escapeHtml(evidenceSummary)}</div>`;
+      }
+      if (recommendedAction && recommendedAction !== evidenceSummary) {
+        summaryLine += `<div class="queue-row-meta" style="margin-top:2px;font-style:italic">${escapeHtml(recommendedAction)}</div>`;
+      }
+
+      // Quick action buttons based on current state
+      let actions = '';
+      if (ws === 'open') {
+        actions = `
+          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','acknowledged')">Acknowledge</button>
+          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','dismissed')">Dismiss</button>
+        `;
+      } else if (ws === 'acknowledged') {
+        actions = `
+          <button class="btn btn-sm btn-success" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','fixed')">Fixed</button>
+          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','dismissed')">Dismiss</button>
+        `;
+      } else if (ws === 'dismissed' || ws === 'fixed' || ws === 'accepted_risk') {
+        actions = `
+          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','open')">Reopen</button>
+        `;
+      } else if (ws === 'snoozed') {
+        actions = `
+          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','open')">Reopen</button>
+        `;
+      }
+
+      return `<div class="queue-row" tabindex="0" onclick="openDetail('${f.finding_key}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail('${f.finding_key}');}">
+        <div class="queue-row-header">
+          <span class="pill ${pillCls}">${pillLabel}</span>
+          ${trustBadge}
+          <span class="queue-row-title">${escapeHtml(f.title)}</span>
+          <div class="queue-row-actions">${actions}</div>
+        </div>
+        <div class="queue-row-meta">
+          ${metaParts.map(p => `<span>${p}</span>`).join('')}
+          ${f.note ? `<span>Note: ${escapeHtml(f.note).substring(0, 60)}</span>` : ''}
+        </div>
+        ${summaryLine}
+      </div>`;
+    }).join('');
+  }
+
+  async function quickAction(btn, findingKey, newState) {
+    if (newState === 'dismissed') { openDismissModal(findingKey); return; }
+
+    if (_inFlight.has(findingKey)) return;
+    _inFlight.add(findingKey);
+    if (btn) btn.disabled = true;
+    try {
+      await fetchJSON(`/api/findings/${findingKey}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ state: newState }),
+      });
+      await loadQueueData().catch(() => {});
+      if (activeScanId) {
+        try {
+          const data = await fetchJSON(`/api/scans/${activeScanId}`);
+          currentScanData = data;
+          updateResultsBadges();
+        } catch (_) {}
+      }
+      showToast('Action saved.', 'success');
+    } catch (err) {
+      showToast(err.message || 'Action failed.', 'error');
+    } finally {
+      _inFlight.delete(findingKey);
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function updateResultsBadges() {
+    renderResultsTable();
+  }
+
+  // --- Result Detail Drawer ---
+
+  function openResultDetail(docId) {
+    if (!currentScanData) return;
+    const results = currentScanData.results || [];
+    const r = results.find(x => x.id === docId);
+    if (!r) return;
+
+    const STATUS_MAP = {
+      stale: { cls: 'pill-stale', label: 'Stale' },
+      needs_review: { cls: 'pill-needs-review', label: 'Needs Review' },
+      unknown: { cls: 'pill-unknown', label: 'Unknown' },
+      current: { cls: 'pill-current', label: 'Current' },
+    };
+    const st = STATUS_MAP[r.overall_status] || STATUS_MAP.unknown;
+    const titleLink = (r.url && !isDemoUrl(r.url))
+      ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.title)}</a>`
+      : escapeHtml(r.title);
+
+    document.getElementById('resultDrawerTitle').innerHTML =
+      `<span class="pill ${st.cls}" style="font-size:11px">${st.label}</span>\u00a0${escapeHtml(r.title)}`;
+
+    const ev = r.trust_evidence || {};
+    const meta = r.trust_metadata || {};
+    const wf = r.workflow || {};
+    const confPct = Math.round((r.confidence || 0) * 100);
+    const modified = r.last_modified ? r.last_modified.substring(0, 10) : null;
+    const lastReviewed = meta.last_reviewed;
+    const owner = getResultOwner(r);
+    const due = getResultDueDate(r);
+    const ws = getResultWorkflowState(r);
+
+    const posList = (ev.positive_evidence || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+    const riskList = (ev.review_risks || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+    const missingList = (ev.missing_evidence || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+    const recAction = ev.recommended_action
+      ? `<div style="margin-top:8px;font-style:italic;color:var(--text-secondary);font-size:13px">${escapeHtml(ev.recommended_action)}</div>`
+      : '';
+
+    let replacementSection = '';
+    if (r.suggested_replacement_id) {
+      const repDoc = results.find(x => x.id === r.suggested_replacement_id);
+      if (repDoc) {
+        const repTitleHtml = (repDoc.url && !isDemoUrl(repDoc.url))
+          ? `<a href="${escapeHtml(repDoc.url)}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">${escapeHtml(repDoc.title)}</a>`
+          : escapeHtml(repDoc.title);
+        replacementSection = `<div class="detail-section">
+      <div class="detail-section-title">Suggested replacement</div>
+      <div style="font-size:13px">${repTitleHtml}</div>
+    </div>`;
+      }
+    }
+
+    let wfActionsHtml = '';
+    if (wf.finding_key) {
+      const fk = wf.finding_key;
+      if (!ws || ws === 'open') {
+        wfActionsHtml = `
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','acknowledged')">Acknowledge</button>
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','snoozed')">Snooze\u2026</button>
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
+      } else if (ws === 'acknowledged') {
+        wfActionsHtml = `
+          <button class="btn btn-sm btn-success" onclick="quickResultAction(this,'${fk}','fixed')">Mark Fixed</button>
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
+      } else {
+        wfActionsHtml = `
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','open')">Reopen</button>`;
+      }
+      wfActionsHtml += ` <button class="btn btn-sm btn-outline" onclick="openDetail('${fk}')">Full editor\u2026</button>`;
+    }
+
+    const wfSection = wf.finding_key ? `
+      <div class="detail-section">
+        <div class="detail-section-title">Workflow</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+          ${ws ? `<span class="pill ${STATE_PILL_CLS[ws] || 'pill-unknown'}" style="font-size:11px">${STATE_LABELS[ws] || ws}</span>` : ''}
+          ${owner ? `<span style="font-size:13px;color:var(--text-secondary)">Owner: ${escapeHtml(owner)}</span>` : ''}
+          ${due ? `<span style="font-size:13px;color:var(--text-secondary)">Due: ${escapeHtml(due)}</span>` : ''}
+          ${wf.snoozed_until && ws === 'snoozed' ? `<span style="font-size:13px;color:var(--cyan)">Snoozed until: ${escapeHtml(wf.snoozed_until)}</span>` : ''}
+        </div>
+        ${wf.note ? `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px">Note: ${escapeHtml(wf.note)}</div>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${wfActionsHtml}</div>
+      </div>` : '';
+
+    document.getElementById('resultDrawerBody').innerHTML = `
+      <div class="detail-section">
+        <div class="detail-section-title">Document</div>
+        <div style="font-weight:600;margin-bottom:6px">${titleLink}</div>
+        <div style="font-size:13px;color:var(--text-secondary);display:flex;gap:12px;flex-wrap:wrap">
+          <span>Confidence: ${confPct}%</span>
+          ${lastReviewed ? `<span>Last reviewed: ${escapeHtml(lastReviewed)}</span>` : ''}
+          ${modified ? `<span>Last modified: ${modified}</span>` : ''}
+        </div>
+      </div>
+      ${ev.summary ? `<div class="detail-section">
+        <div class="detail-section-title">Summary</div>
+        <div style="font-size:13px;color:var(--text-secondary)">${escapeHtml(ev.summary)}</div>
+      </div>` : ''}
+      ${posList ? `<div class="detail-section">
+        <div class="detail-section-title">Positive Evidence</div>
+        <ul class="reason-list" style="font-size:13px;color:var(--text-secondary)">${posList}</ul>
+      </div>` : ''}
+      ${riskList ? `<div class="detail-section">
+        <div class="detail-section-title">Review Risks</div>
+        <ul class="reason-list" style="font-size:13px;color:var(--text-secondary)">${riskList}</ul>
+      </div>` : ''}
+      ${missingList ? `<div class="detail-section">
+        <div class="detail-section-title">Missing Evidence</div>
+        <ul class="reason-list" style="font-size:13px;color:var(--text-secondary)">${missingList}</ul>
+      </div>` : ''}
+      ${recAction}
+      ${replacementSection}
+      ${wfSection}
+    `;
+
+    _drawerLastFocus = document.activeElement;
+    document.getElementById('resultDrawerBackdrop').classList.add('active');
+    document.getElementById('resultDrawer').classList.add('active');
+    document.getElementById('drawerCloseBtn').focus();
+  }
+
+  function closeResultDrawer() {
+    document.getElementById('resultDrawerBackdrop').classList.remove('active');
+    document.getElementById('resultDrawer').classList.remove('active');
+    if (_drawerLastFocus) { _drawerLastFocus.focus(); _drawerLastFocus = null; }
+  }
+
+  async function quickResultAction(btn, findingKey, newState) {
+    if (newState === 'snoozed') { openSnoozeModal(findingKey); return; }
+    if (newState === 'dismissed') { openDismissModal(findingKey); return; }
+
+    if (_inFlight.has(findingKey)) return;
+    _inFlight.add(findingKey);
+    if (btn) btn.disabled = true;
+    try {
+      await fetchJSON(`/api/findings/${findingKey}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ state: newState }),
+      });
+      if (activeScanId) {
+        try {
+          const data = await fetchJSON(`/api/scans/${activeScanId}`);
+          currentScanData = data;
+          renderResultsTable();
+          const drawer = document.getElementById('resultDrawer');
+          if (drawer.classList.contains('active')) {
+            const r = (data.results || []).find(x => x.workflow && x.workflow.finding_key === findingKey);
+            if (r) openResultDetail(r.id);
+          }
+        } catch (_) {}
+      }
+      await loadQueueData().catch(() => {});
+      showToast('Action saved.', 'success');
+    } catch (err) {
+      showToast(err.message || 'Action failed.', 'error');
+    } finally {
+      _inFlight.delete(findingKey);
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // --- Action Modal (Snooze / Dismiss) ---
+
+  function _openActionModal(title, bodyHtml, confirmLabel, findingKey, state) {
+    _actionModalPendingKey = findingKey;
+    _actionModalPendingState = state;
+    _actionModalLastFocus = document.activeElement;
+    document.getElementById('actionModalTitle').textContent = title;
+    document.getElementById('actionModalBody').innerHTML = bodyHtml;
+    document.getElementById('actionModalConfirm').textContent = confirmLabel;
+    document.getElementById('actionModalError').style.display = 'none';
+    document.getElementById('actionModalConfirm').disabled = false;
+    const backdrop = document.getElementById('actionModalBackdrop');
+    const modal = document.getElementById('actionModal');
+    backdrop.classList.add('active');
+    modal.style.display = 'flex';
+    const firstInput = modal.querySelector('input');
+    if (firstInput) firstInput.focus();
+    else document.getElementById('actionModalConfirm').focus();
+  }
+
+  function openSnoozeModal(findingKey) {
+    const today = new Date().toISOString().slice(0, 10);
+    _openActionModal(
+      'Snooze finding',
+      `<div class="field">
+        <label for="snoozeUntilInput">Snooze until <span style="color:var(--red)">*</span></label>
+        <input type="date" id="snoozeUntilInput" min="${today}" required>
+      </div>`,
+      'Snooze', findingKey, 'snoozed'
+    );
+  }
+
+  function openDismissModal(findingKey) {
+    _openActionModal(
+      'Dismiss finding',
+      `<div class="field">
+        <label for="dismissReasonInput">Reason <span style="color:var(--text-secondary);font-weight:400">(optional)</span></label>
+        <input type="text" id="dismissReasonInput" placeholder="Why is this being dismissed?">
+      </div>`,
+      'Dismiss', findingKey, 'dismissed'
+    );
+  }
+
+  function closeActionModal() {
+    document.getElementById('actionModalBackdrop').classList.remove('active');
+    document.getElementById('actionModal').style.display = 'none';
+    _actionModalPendingKey = null;
+    _actionModalPendingState = null;
+    if (_actionModalLastFocus) { _actionModalLastFocus.focus(); _actionModalLastFocus = null; }
+  }
+
+  async function submitActionModal() {
+    if (!_actionModalPendingKey || !_actionModalPendingState) return;
+    const errEl = document.getElementById('actionModalError');
+    const confirmBtn = document.getElementById('actionModalConfirm');
+    errEl.style.display = 'none';
+
+    const body = { state: _actionModalPendingState };
+    if (_actionModalPendingState === 'snoozed') {
+      const dateInput = document.getElementById('snoozeUntilInput');
+      if (!dateInput || !dateInput.value) {
+        errEl.textContent = 'A date is required.';
+        errEl.style.display = '';
+        return;
+      }
+      body.snoozed_until = dateInput.value;
+    } else if (_actionModalPendingState === 'dismissed') {
+      const reasonInput = document.getElementById('dismissReasonInput');
+      if (reasonInput && reasonInput.value.trim()) body.dismissal_reason = reasonInput.value.trim();
+    }
+
+    const findingKey = _actionModalPendingKey;
+    if (_inFlight.has(findingKey)) return;
+    _inFlight.add(findingKey);
+    confirmBtn.disabled = true;
+    try {
+      await fetchJSON(`/api/findings/${findingKey}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      closeActionModal();
+      if (activeScanId) {
+        try {
+          const data = await fetchJSON(`/api/scans/${activeScanId}`);
+          currentScanData = data;
+          renderResultsTable();
+          const drawer = document.getElementById('resultDrawer');
+          if (drawer.classList.contains('active')) {
+            const r = (data.results || []).find(x => x.workflow && x.workflow.finding_key === findingKey);
+            if (r) openResultDetail(r.id);
+          }
+        } catch (_) {}
+      }
+      await loadQueueData().catch(() => {});
+      showToast('Action saved.', 'success');
+    } catch (err) {
+      errEl.textContent = err.message || 'Action failed.';
+      errEl.style.display = '';
+    } finally {
+      _inFlight.delete(findingKey);
+      confirmBtn.disabled = false;
+    }
+  }
+
+  // --- Finding Detail Panel ---
+
+  async function openDetail(findingKey) {
+    activeDetailKey = findingKey;
+    let finding;
+    try {
+      finding = await fetchJSON(`/api/findings/${findingKey}`);
+    } catch (err) {
+      showToast(err.message, 'error');
+      activeDetailKey = null;
+      return;
+    }
+
+    const titleEl = document.getElementById('detailTitle');
+    const bodyEl = document.getElementById('detailBody');
+
+    const ws = finding.workflow_state;
+    const pillCls = STATE_PILL_CLS[ws] || 'pill-unknown';
+    const pillLabel = STATE_LABELS[ws] || ws;
+    titleEl.innerHTML = `<span class="pill ${pillCls}">${pillLabel}</span> ${escapeHtml(finding.title)}`;
+
+    const stateOptions = WORKFLOW_STATES.map(s =>
+      `<option value="${s}" ${s === ws ? 'selected' : ''}>${STATE_LABELS[s]}</option>`
+    ).join('');
+
+    // Build audit context section
+    const ctx = finding.audit_context;
+    let auditHtml = '';
+    if (ctx) {
+      const STATUS_MAP = {
+        'stale': { cls: 'pill-stale', label: 'Stale' },
+        'needs_review': { cls: 'pill-needs-review', label: 'Needs Review' },
+        'current': { cls: 'pill-current', label: 'Current' },
+        'unknown': { cls: 'pill-unknown', label: 'Unknown' },
+      };
+      const trustSt = STATUS_MAP[ctx.overall_status] || STATUS_MAP['unknown'];
+      const confPct = Math.round((ctx.confidence || 0) * 100);
+      const urlLink = (ctx.url && !isDemoUrl(ctx.url))
+        ? `<div><a href="${escapeHtml(ctx.url)}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">${escapeHtml(ctx.url)}</a></div>`
+        : '';
+      const ev = ctx.trust_evidence || {};
+      const summaryText = ev.summary ? `<div style="margin-top:4px">${escapeHtml(ev.summary)}</div>` : '';
+      const posList = (ev.positive_evidence || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+      const riskList = (ev.review_risks || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+      const missingList = (ev.missing_evidence || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+      const recAction = ev.recommended_action ? `<div style="margin-top:4px;font-style:italic">${escapeHtml(ev.recommended_action)}</div>` : '';
+
+      auditHtml = `
+      <div class="detail-section">
+        <div class="detail-section-title">Audit Context</div>
+        <div style="font-size:13px;color:var(--text-secondary)">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+            <span class="pill ${trustSt.cls}">${trustSt.label}</span>
+            <span>Confidence: ${confPct}%</span>
+            <span>Source: ${escapeHtml(capitalize(finding.source_type))}</span>
+          </div>
+          ${urlLink}
+          ${summaryText}
+          ${posList ? `<div style="margin-top:6px"><strong style="font-size:12px">Positive evidence:</strong><ul class="reason-list">${posList}</ul></div>` : ''}
+          ${riskList ? `<div style="margin-top:6px"><strong style="font-size:12px">Review risks:</strong><ul class="reason-list">${riskList}</ul></div>` : ''}
+          ${missingList ? `<div style="margin-top:6px"><strong style="font-size:12px">Missing evidence:</strong><ul class="reason-list">${missingList}</ul></div>` : ''}
+          ${recAction}
+        </div>
+      </div>`;
+    }
+
+    bodyEl.innerHTML = `
+      <div class="detail-section">
+        <div class="detail-section-title">Finding Key</div>
+        <code style="font-size:12px;color:var(--text-secondary)">${escapeHtml(finding.finding_key)}</code>
+      </div>
+
+      ${auditHtml}
+
+      <div class="detail-section">
+        <div class="detail-section-title">Workflow</div>
+        <div class="detail-field-row">
+          <div class="field">
+            <label for="detailState">State</label>
+            <select id="detailState">${stateOptions}</select>
+          </div>
+          <div class="field">
+            <label for="detailOwner">Owner</label>
+            <input type="text" id="detailOwner" value="${escapeHtml(finding.assigned_owner || '')}" placeholder="e.g. jane@co">
+          </div>
+        </div>
+        <div class="detail-field-row">
+          <div class="field">
+            <label for="detailDueDate">Due Date</label>
+            <input type="date" id="detailDueDate" value="${finding.due_date || ''}">
+          </div>
+          <div class="field">
+            <label for="detailSnoozeUntil">Snooze Until</label>
+            <input type="date" id="detailSnoozeUntil" value="${finding.snoozed_until || ''}">
+          </div>
+        </div>
+        <div class="field" style="margin-top:8px">
+          <label for="detailNote">Note</label>
+          <input type="text" id="detailNote" value="${escapeHtml(finding.note || '')}" placeholder="Add a note...">
+        </div>
+        <div class="field" style="margin-top:8px">
+          <label for="detailReason">Dismissal / Acceptance Reason</label>
+          <input type="text" id="detailReason" value="${escapeHtml(finding.dismissal_reason || '')}" placeholder="Reason for dismissing or accepting risk...">
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-section-title">Tracking</div>
+        <div style="font-size:13px;color:var(--text-secondary)">
+          <div>First seen: scan #${finding.first_seen_scan_id || 'N/A'}</div>
+          <div>Last seen: scan #${finding.last_seen_scan_id || 'N/A'}</div>
+          <div>Updated: ${finding.updated_at ? finding.updated_at.substring(0, 16).replace('T', ' ') : 'N/A'}</div>
+          <div>Evidence hash: <code>${escapeHtml(finding.evidence_hash || '')}</code></div>
+        </div>
+      </div>
+    `;
+
+    _detailLastFocus = document.activeElement;
+    document.getElementById('detailOverlay').classList.add('active');
+    document.getElementById('detailSaveBtn').focus();
+  }
+
+  function closeDetail() {
+    document.getElementById('detailOverlay').classList.remove('active');
+    const errEl = document.getElementById('detailError');
+    errEl.textContent = '';
+    errEl.style.display = 'none';
+    activeDetailKey = null;
+    if (_detailLastFocus) { _detailLastFocus.focus(); _detailLastFocus = null; }
+  }
+
+  // Build a state-aware PATCH payload.
+  //
+  // Two rules govern which fields are included:
+  //
+  // 1. Always-editable metadata (assigned_owner, due_date, note):
+  //    Always included, even as null. The API uses model_fields_set to
+  //    distinguish "included as null → clear" from "omitted → leave unchanged",
+  //    so sending null here correctly clears an existing value when the user
+  //    empties the input.
+  //
+  // 2. State-specific fields (snoozed_until, dismissal_reason):
+  //    Included only for states where they are meaningful.
+  //    - snoozed_until: included only for "snoozed"; omitting it for other
+  //      states lets backend transition cleanup clear any stale snooze date.
+  //    - dismissal_reason: included (even as null) for "dismissed" and
+  //      "accepted_risk" so the user can clear an existing reason; omitted for
+  //      all other states so backend cleanup clears stale reasons on transition.
+  function buildWorkflowPayload(state) {
+    const body = {
+      state: state,
+      // null when empty → API sees field in model_fields_set and clears column
+      assigned_owner: document.getElementById('detailOwner').value || null,
+      due_date: document.getElementById('detailDueDate').value || null,
+      note: document.getElementById('detailNote').value || null,
+    };
+    if (state === 'snoozed') {
+      body.snoozed_until = document.getElementById('detailSnoozeUntil').value || null;
+    }
+    if (state === 'dismissed' || state === 'accepted_risk') {
+      // Always include (even as null) so user can clear an existing reason.
+      body.dismissal_reason = document.getElementById('detailReason').value || null;
+    }
+    return body;
+  }
+
+  async function saveDetail() {
+    if (!activeDetailKey) return;
+    const state = document.getElementById('detailState').value;
+
+    const errEl = document.getElementById('detailError');
+    errEl.textContent = '';
+    errEl.style.display = 'none';
+
+    // Client-side snooze validation — catch missing date before hitting API.
+    if (state === 'snoozed' && !document.getElementById('detailSnoozeUntil').value) {
+      errEl.textContent = 'A Snooze Until date is required when setting state to Snoozed.';
+      errEl.style.display = '';
+      return;
+    }
+
+    const key = activeDetailKey;
+    if (_inFlight.has(key)) return;
+    _inFlight.add(key);
+    const saveBtn = document.getElementById('detailSaveBtn');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      const body = buildWorkflowPayload(state);
+      await fetchJSON(`/api/findings/${key}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      closeDetail();  // clears activeDetailKey — must use captured `key` from here on
+      showToast('Changes saved.', 'success');
+      await loadQueueData().catch(() => {});
+      if (activeScanId) {
+        try {
+          const data = await fetchJSON(`/api/scans/${activeScanId}`);
+          currentScanData = data;
+          updateResultsBadges();
+        } catch (_) {}
+      }
+    } catch (err) {
+      errEl.textContent = err.message || `Save failed.`;
+      errEl.style.display = '';
+      // keep panel open so the user can correct the error
+    } finally {
+      _inFlight.delete(key);
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
+  // --- Utility ---
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function capitalize(str) {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
+
+  // --- Report ---
+
+  let reportScanId = null;
+
+  async function showReport() {
+    const scanId = activeScanId;
+    if (!scanId) return;
+    reportScanId = scanId;
+    const data = await fetchJSON(`/api/scans/${scanId}/report`);
+    const body = document.getElementById('reportBody');
+    const title = document.getElementById('reportTitle');
+
+    const scanDate = data.scan?.started_at?.substring(0, 16).replace('T', ' ') || '';
+    title.textContent = `Flagged Content Report \u2014 Scan #${scanId}`;
+
+    const stale = data.stale_documents || [];
+    const needsReview = data.needs_review_documents || [];
+    const unknownDocs = data.unknown_documents || [];
+    const flagged = stale.map(r => ({...r, _status: 'stale'}))
+      .concat(needsReview.map(r => ({...r, _status: 'needs_review'})))
+      .concat(unknownDocs.map(r => ({...r, _status: 'unknown'})));
+
+    if (!flagged.length) {
+      body.innerHTML = '<div class="report-no-stale">No flagged content detected.</div>';
+    } else {
+      const parts = [];
+      if (stale.length) parts.push(`<strong>${stale.length}</strong> stale`);
+      if (needsReview.length) parts.push(`<strong>${needsReview.length}</strong> needs review`);
+      if (unknownDocs.length) parts.push(`<strong>${unknownDocs.length}</strong> unknown`);
+
+      // Get workflow data for report enrichment
+      let wfMap = {};
+      if (currentScanData && currentScanData.results) {
+        for (const r of currentScanData.results) {
+          if (r.workflow) wfMap[r.id] = r.workflow;
+        }
+      }
+
+      let html = `<div class="report-summary-box">
+        ${parts.join(', ')} out of <strong>${data.total_documents}</strong> documents scanned
+        ${scanDate ? `on ${scanDate}` : ''}.
+      </div>`;
+
+      html += flagged.map(r => {
+        const confPct = r.confidence != null ? Math.round(r.confidence * 100) : 0;
+        const titleLink = (r.url && !isDemoUrl(r.url))
+          ? `<a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.title)}</a>`
+          : escapeHtml(r.title);
+        const modified = r.last_modified ? r.last_modified.substring(0, 10) : 'N/A';
+        const reportLastReviewed = r.trust_metadata?.last_reviewed;
+        const reportDate = reportLastReviewed ? `Last reviewed: ${reportLastReviewed}` : `Last modified: ${modified}`;
+
+        const pillCls = r._status === 'stale' ? 'pill-stale'
+          : r._status === 'needs_review' ? 'pill-needs-review' : 'pill-unknown';
+        const pillLabel = r._status === 'stale' ? 'Stale'
+          : r._status === 'needs_review' ? 'Needs Review' : 'Unknown';
+
+        // Workflow metadata enrichment
+        const wf = wfMap[r.id];
+        let wfHtml = '';
+        if (wf) {
+          const ws = wf.state;
+          const wsPillCls = STATE_PILL_CLS[ws] || 'pill-unknown';
+          const wsLabel = STATE_LABELS[ws] || ws;
+          const wfParts = [`<span class="pill ${wsPillCls}" style="font-size:11px">${wsLabel}</span>`];
+          if (wf.assigned_owner) wfParts.push(`Owner: ${escapeHtml(wf.assigned_owner)}`);
+          if (wf.due_date) wfParts.push(`Due: ${escapeHtml(wf.due_date)}`);
+          if (wf.note) wfParts.push(`Note: ${escapeHtml(wf.note)}`);
+          wfHtml = `<div class="report-item-meta" style="display:flex;gap:8px;align-items:center;margin-top:4px">${wfParts.join(' ')}</div>`;
+        }
+
+        let signalsHtml = '';
+        if (r.signals && r.signals.length) {
+          signalsHtml = '<ul class="report-signal-list">' + r.signals.map(s => {
+            const dotColor = s.severity === 'critical' ? 'var(--red)'
+              : s.severity === 'warning' ? 'var(--amber)' : 'var(--green)';
+            return `<li><span class="severity-dot" style="background:${dotColor}"></span>${escapeHtml(s.message)}</li>`;
+          }).join('') + '</ul>';
+        }
+
+        return `<div class="report-item">
+          <div class="report-item-header">
+            <span class="pill ${pillCls}">${pillLabel}</span>
+            <span class="title">${titleLink}</span>
+          </div>
+          <div class="report-item-meta">
+            Confidence: ${confPct}%${r.confidence_reason ? ' \u2014 ' + escapeHtml(r.confidence_reason) : ''}
+          </div>
+          <div class="report-item-meta">${reportDate}</div>
+          ${wfHtml}
+          ${signalsHtml}
+        </div>`;
+      }).join('');
+
+      body.innerHTML = html;
+    }
+
+    _reportLastFocus = document.activeElement;
+    document.getElementById('reportOverlay').classList.add('active');
+    document.getElementById('reportCloseBtn').focus();
+  }
+
+  function closeReport() {
+    document.getElementById('reportOverlay').classList.remove('active');
+    if (_reportLastFocus) { _reportLastFocus.focus(); _reportLastFocus = null; }
+  }
+
+  function downloadReport(format) {
+    if (!reportScanId) return;
+    const url = `/api/scans/${reportScanId}/report?format=${format}`;
+    if (format === 'text') {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `review-report-scan-${reportScanId}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } else {
+      fetch(url).then(r => r.json()).then(data => {
+        const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `review-report-scan-${reportScanId}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(a.href);
+      });
+    }
+  }
+
+  async function clearHistory() {
+    if (!confirm('Clear all scan history?')) return;
+    await fetch('/api/scans', { method: 'DELETE' });
+    activeScanId = null;
+    document.getElementById('mainCard').style.display = 'none';
+    document.getElementById('welcomeCard').style.display = '';
+    await loadHistory();
+  }
+
+  // Close only the topmost open layer on Escape
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (document.getElementById('actionModal').style.display !== 'none') {
+      closeActionModal();
+    } else if (document.getElementById('detailOverlay').classList.contains('active')) {
+      closeDetail();
+    } else if (document.getElementById('resultDrawer').classList.contains('active')) {
+      closeResultDrawer();
+    } else if (document.getElementById('reportOverlay').classList.contains('active')) {
+      closeReport();
+    }
+  });
+
+  // Keyboard handler for result rows — Enter or Space opens the detail drawer.
+  //
+  // Implementation notes:
+  //  - Uses window capture phase so event.preventDefault() runs before Chromium's
+  //    built-in Space-key page-scroll behaviour.
+  //  - Reads document.activeElement rather than event.target because Chromium does
+  //    not reliably set event.target to the <tr> element when it is focused via
+  //    tabindex="0" (keyboard events may be delivered with the document as target).
+  //  - Guards against interactive descendants: if the focused element is a button,
+  //    link, or form control the row activation is skipped so that button keyboard
+  //    behaviour is preserved.
+  window.addEventListener('keydown', function(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const active = document.activeElement;
+    if (!active) return;
+    // Skip if focus is on an interactive descendant.
+    if (active.closest('button, a, input, select, textarea')) return;
+    const tr = active.closest('tr[data-doc-id]');
+    if (!tr) return;
+    event.preventDefault(); // prevent Space scroll; harmless for Enter
+    openResultDetail(tr.dataset.docId);
+  }, true); // capture phase
+
+  init();
+</script>
+
+</body>
+</html>
