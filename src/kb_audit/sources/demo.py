@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 
-from kb_audit.models import Document
+from kb_audit.models import Document, DocumentLink
 from kb_audit.sources.base import DocumentSource
 
 _BASE_URL = "https://demo.example/pages/"
@@ -112,6 +112,15 @@ def _build_pages(now: datetime | None = None) -> list[Document]:
             source_type="demo",
             url=f"{_BASE_URL}legacy-payment-integration",
             last_modified=now - timedelta(days=500),
+            links=[
+                DocumentLink(
+                    url=f"{_BASE_URL}payment-api-guide-v3",
+                    target_title="Payment API Guide v3",
+                    text="replaced by Payment API Guide v3",
+                    context="This page has been replaced by Payment API Guide v3. Use the new guide for all integrations.",
+                    source="demo",
+                )
+            ],
         ),
         # 6 ─ Payment Service Authentication
         Document(

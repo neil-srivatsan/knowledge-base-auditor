@@ -69,6 +69,150 @@ def test_missing_api_key():
         NotionSource(api_key="")
 
 
+# ---------------------------------------------------------------------------
+# Structured link extraction: DocumentLink text/context preservation
+# ---------------------------------------------------------------------------
+
+
+def _make_notion_page(page_id: str, title: str) -> dict:
+    return {
+        "id": page_id,
+        "object": "page",
+        "url": f"https://notion.so/{page_id}",
+        "last_edited_time": "2025-06-01T00:00:00.000Z",
+        "created_time": "2025-01-01T00:00:00.000Z",
+        "created_by": {"id": "user-1"},
+        "last_edited_by": {"id": "user-1"},
+        "parent": {"type": "workspace"},
+        "archived": False,
+        "properties": {
+            "title": {
+                "type": "title",
+                "title": [{"plain_text": title}],
+            }
+        },
+    }
+
+
+@respx.mock
+def test_rich_text_link_preserves_text_and_context():
+    """Rich text links produce DocumentLinks with url, text, and block context."""
+    page = _make_notion_page("page-link-1", "Old API Guide")
+    respx.post("https://api.notion.com/v1/search").mock(
+        return_value=httpx.Response(200, json={"results": [page], "has_more": False})
+    )
+    respx.get("https://api.notion.com/v1/blocks/page-link-1/children").mock(
+        return_value=httpx.Response(200, json={
+            "results": [
+                {
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {"plain_text": "This page has been "},
+                            {
+                                "plain_text": "replaced by New API Guide",
+                                "href": "https://notion.so/new-api-guide",
+                                "text": {"link": {"url": "https://notion.so/new-api-guide"}},
+                            },
+                        ]
+                    },
+                }
+            ],
+            "has_more": False,
+        })
+    )
+
+    source = NotionSource(api_key="test-key")
+    docs = list(source.fetch_documents())
+    source.close()
+
+    assert len(docs) == 1
+    doc = docs[0]
+    assert len(doc.links) == 1
+    link = doc.links[0]
+    assert link.url == "https://notion.so/new-api-guide"
+    assert link.text == "replaced by New API Guide"
+    assert link.context == "This page has been replaced by New API Guide"
+    assert link.source == "notion"
+
+
+@respx.mock
+def test_notion_metadata_links_backward_compat():
+    """metadata['links'] still contains plain URL strings."""
+    page = _make_notion_page("page-compat-1", "Guide")
+    respx.post("https://api.notion.com/v1/search").mock(
+        return_value=httpx.Response(200, json={"results": [page], "has_more": False})
+    )
+    respx.get("https://api.notion.com/v1/blocks/page-compat-1/children").mock(
+        return_value=httpx.Response(200, json={
+            "results": [
+                {
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {
+                                "plain_text": "See the new version",
+                                "href": "https://notion.so/new-version",
+                                "text": {"link": {"url": "https://notion.so/new-version"}},
+                            },
+                        ]
+                    },
+                }
+            ],
+            "has_more": False,
+        })
+    )
+
+    source = NotionSource(api_key="test-key")
+    docs = list(source.fetch_documents())
+    source.close()
+
+    doc = docs[0]
+    url_strings = doc.metadata.get("links", [])
+    assert "https://notion.so/new-version" in url_strings
+    assert all(isinstance(u, str) for u in url_strings)
+
+
+@respx.mock
+def test_bookmark_without_caption_uses_url_as_text_and_context():
+    """bookmark block with no caption falls back to URL for text/context."""
+    page = _make_notion_page("page-bk-1", "Resource Page")
+    respx.post("https://api.notion.com/v1/search").mock(
+        return_value=httpx.Response(200, json={"results": [page], "has_more": False})
+    )
+    respx.get("https://api.notion.com/v1/blocks/page-bk-1/children").mock(
+        return_value=httpx.Response(200, json={
+            "results": [
+                # A paragraph to give the page content (so it isn't skipped)
+                {
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"plain_text": "See below."}]},
+                },
+                # A bookmark block with no caption
+                {
+                    "type": "bookmark",
+                    "bookmark": {"url": "https://external.example.com/ref", "caption": []},
+                    "has_children": False,
+                },
+            ],
+            "has_more": False,
+        })
+    )
+
+    source = NotionSource(api_key="test-key")
+    docs = list(source.fetch_documents())
+    source.close()
+
+    doc = docs[0]
+    bookmark_links = [lnk for lnk in doc.links if lnk.url == "https://external.example.com/ref"]
+    assert len(bookmark_links) == 1
+    link = bookmark_links[0]
+    assert link.text is not None and len(link.text) > 0
+    assert link.context is not None and len(link.context) > 0
+    assert link.source == "notion"
+    assert "https://external.example.com/ref" in doc.metadata.get("links", [])
+
+
 # --- URL parsing ---
 
 

@@ -11,7 +11,7 @@ from datetime import datetime
 
 import httpx
 
-from kb_audit.models import Document
+from kb_audit.models import Document, DocumentLink
 from kb_audit.sources.base import DocumentSource
 
 logger = logging.getLogger(__name__)
@@ -600,8 +600,9 @@ class NotionSource(DocumentSource):
                 "last_edited_by": page.get("last_edited_by", {}).get("id"),
                 "parent": page.get("parent", {}),
                 "archived": page.get("archived", False),
-                "links": links,
+                "links": [dl.url for dl in links if dl.url is not None],
             },
+            links=links,
         )
         return doc, child_refs
 
@@ -622,19 +623,19 @@ class NotionSource(DocumentSource):
 
     def _fetch_page_content(
         self, page_id: str, max_depth: int = 5,
-    ) -> tuple[str, list[str], list[tuple[str, str]]]:
+    ) -> tuple[str, list[DocumentLink], list[tuple[str, str]]]:
         """Fetch all blocks of a page and flatten to plain text.
 
         Recursively traverses nested blocks (toggles, callouts, columns, etc.)
         up to max_depth levels.
 
         Returns:
-            (content_text, urls_found, child_refs) where child_refs is a list
+            (content_text, doc_links, child_refs) where child_refs is a list
             of (block_id, block_type) for child_page and child_database blocks
             discovered during traversal.
         """
         blocks: list[str] = []
-        links: list[str] = []
+        links: list[DocumentLink] = []
         child_refs: list[tuple[str, str]] = []
         self._fetch_blocks_recursive(
             page_id, blocks, links, child_refs, depth=0, max_depth=max_depth,
@@ -642,7 +643,7 @@ class NotionSource(DocumentSource):
         return "\n".join(blocks), links, child_refs
 
     def _fetch_blocks_recursive(
-        self, block_id: str, blocks: list[str], links: list[str],
+        self, block_id: str, blocks: list[str], links: list[DocumentLink],
         child_refs: list[tuple[str, str]],
         depth: int, max_depth: int,
     ) -> None:
@@ -710,34 +711,39 @@ class NotionSource(DocumentSource):
 
         return ""
 
-    def _extract_block_links(self, block: dict, links: list[str]) -> None:
-        """Extract URLs from rich_text href fields and bookmark/embed blocks."""
+    def _extract_block_links(self, block: dict, links: list[DocumentLink]) -> None:
+        """Extract DocumentLinks from rich_text href fields and bookmark/embed blocks."""
         block_type = block.get("type", "")
         block_data = block.get(block_type, {})
+
+        # Full block text used as context for every link in this block
+        block_context = self._extract_block_text(block) or None
 
         # Links in rich_text spans
         for rt in block_data.get("rich_text", []):
             href = rt.get("href") or (rt.get("text", {}).get("link") or {}).get("url")
             if href:
-                links.append(href)
+                rt_text = rt.get("plain_text", "").strip() or None
+                links.append(DocumentLink(
+                    url=href,
+                    text=rt_text,
+                    context=block_context,
+                    source="notion",
+                ))
 
-        # Bookmark blocks
-        if block_type == "bookmark":
+        # Bookmark / embed / link_preview blocks: use caption as text/context;
+        # fall back to the URL itself so text/context are never empty.
+        if block_type in ("bookmark", "embed", "link_preview"):
             url = block_data.get("url")
             if url:
-                links.append(url)
-
-        # Embed blocks
-        if block_type == "embed":
-            url = block_data.get("url")
-            if url:
-                links.append(url)
-
-        # Link preview blocks
-        if block_type == "link_preview":
-            url = block_data.get("url")
-            if url:
-                links.append(url)
+                caption_parts = block_data.get("caption", [])
+                caption = "".join(rt.get("plain_text", "") for rt in caption_parts).strip()
+                links.append(DocumentLink(
+                    url=url,
+                    text=caption or url,
+                    context=caption or url,
+                    source="notion",
+                ))
 
     def close(self) -> None:
         self._client.close()

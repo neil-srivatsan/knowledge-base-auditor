@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from kb_audit.analyzers.base import Analyzer
 from kb_audit.analyzers.broken_links import BrokenLinkAnalyzer
+from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
 from kb_audit.analyzers.references import ReferenceAnalyzer
 from kb_audit.analyzers.similarity import SimilarityAnalyzer
 from kb_audit.analyzers.timestamp import TimestampAnalyzer
@@ -162,6 +163,7 @@ def _build_analyzers(cfg: Config) -> list[Analyzer]:
             patterns=list(cfg.analyzers.version_refs.patterns),
         ),
         BrokenLinkAnalyzer(),
+        InternalLinkAnalyzer(),
         ReferenceAnalyzer(),
     ]
 
@@ -493,6 +495,25 @@ async def get_scan(scan_id: int):
         db.close()
 
 
+def _requires_human_audit(r: dict) -> bool:
+    """Return True if this scan result requires a human audit.
+
+    Mirrors frontend getReviewRequirement() and DB _actionable_results() semantics:
+      - current => never
+      - explicit requires_human_audit=True => yes
+      - explicit requires_human_audit=False => no
+      - flag absent (legacy row) => status-based fallback
+    """
+    if r.get("overall_status") == "current":
+        return False
+    flag = (r.get("trust_metadata") or {}).get("requires_human_audit")
+    if flag is True:
+        return True
+    if flag is False:
+        return False
+    return r.get("overall_status") in ("stale", "needs_review", "unknown")
+
+
 @app.get("/api/scans/{scan_id}/report")
 async def get_stale_report(scan_id: int, format: str = "json"):
     db = _get_db()
@@ -504,6 +525,7 @@ async def get_stale_report(scan_id: int, format: str = "json"):
         needs_review = [r for r in results if r["overall_status"] == "needs_review"]
         unknown = [r for r in results if r["overall_status"] == "unknown"]
         flagged = stale + needs_review + unknown
+        human_audit_docs = [r for r in flagged if _requires_human_audit(r)]
 
         if format == "text":
             lines = [
@@ -513,6 +535,8 @@ async def get_stale_report(scan_id: int, format: str = "json"):
                 f"Stale documents: {len(stale)}",
                 f"Documents needing review: {len(needs_review)}",
                 f"Unknown documents: {len(unknown)}",
+                f"Status-flagged documents: {len(flagged)}",
+                f"Human audits required: {len(human_audit_docs)}",
                 "",
             ]
             if not flagged:
@@ -521,10 +545,12 @@ async def get_stale_report(scan_id: int, format: str = "json"):
                 for i, r in enumerate(flagged, 1):
                     conf_pct = round(r["confidence"] * 100) if r["confidence"] else 0
                     status_label = r["overall_status"].replace("_", " ").upper()
+                    audit_line = "Human audit: required" if _requires_human_audit(r) else "Human audit: not required"
                     lines.append(f"{i}. [{status_label}] {r['title']}")
                     if r.get("url"):
                         lines.append(f"   URL: {r['url']}")
                     lines.append(f"   Confidence: {conf_pct}%")
+                    lines.append(f"   {audit_line}")
                     if r.get("confidence_reason"):
                         lines.append(f"   Reason: {r['confidence_reason']}")
                     if r.get("signals"):
@@ -553,6 +579,9 @@ async def get_stale_report(scan_id: int, format: str = "json"):
             "stale_documents": stale,
             "needs_review_documents": needs_review,
             "unknown_documents": unknown,
+            "status_flagged_count": len(flagged),
+            "human_audit_required_count": len(human_audit_docs),
+            "human_audit_required_documents": human_audit_docs,
         }
     finally:
         db.close()

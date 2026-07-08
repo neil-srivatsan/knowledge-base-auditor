@@ -1069,6 +1069,7 @@ class Database:
                 confidence=r[6],
                 confidence_reason=r[7],
                 trust_evidence=trust_data.get("evidence", {}),
+                trust_metadata=trust_data.get("metadata", {}),
             ))
         return results
 
@@ -1583,12 +1584,14 @@ class Database:
 
         trust_data = json.loads(row[4]) if row[4] else {}
         evidence = trust_data.get("evidence", {})
+        metadata = trust_data.get("metadata", {})
         finding["audit_context"] = {
             "overall_status": row[0],
             "confidence": row[1],
             "confidence_reason": row[2],
             "signals": json.loads(row[3]),
             "url": row[5],
+            "trust_metadata": metadata,
             "trust_evidence": evidence,
         }
         return finding
@@ -1630,10 +1633,26 @@ class Database:
     def _actionable_results(results: list[AuditResult]) -> list[AuditResult]:
         """Filter results to those that need workflow tracking.
 
-        Stale, needs_review, and unknown documents all require human review
-        and receive workflow findings.  Current documents do not.
+        When a result carries an explicit ``requires_human_audit`` flag in
+        ``trust_metadata`` (set by the actionability layer), that flag governs
+        whether the result gets a workflow finding.
+
+        Backward compatibility: results without the flag fall back to the
+        original behaviour — stale, needs_review, and unknown all get findings.
         """
-        return [r for r in results if r.status in ("stale", "needs_review", "unknown")]
+        actionable = []
+        for r in results:
+            if r.status == "current":
+                continue
+            flag = r.trust_metadata.get("requires_human_audit")
+            if flag is None:
+                # Legacy: no explicit flag → old status-based rule
+                if r.status in ("stale", "needs_review", "unknown"):
+                    actionable.append(r)
+            elif flag:
+                actionable.append(r)
+            # else: explicitly not actionable → skip
+        return actionable
 
     def get_scan_diff(self, scan_id: int, prev_scan_id: int) -> list[dict]:
         """Compare two scans and return status changes."""

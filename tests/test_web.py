@@ -44,6 +44,26 @@ def _make_scan_result(doc_id, title, signals=None):
     }
 
 
+class TestBuildAnalyzers:
+    """Verify InternalLinkAnalyzer is wired into the web analyzer stack."""
+
+    def test_internal_links_analyzer_present(self):
+        from kb_audit.web.app import _build_analyzers
+        from kb_audit.config import Config
+        from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
+        analyzers = _build_analyzers(Config())
+        names = [a.name() for a in analyzers]
+        assert "internal_links" in names
+
+    def test_internal_links_after_broken_links_before_references(self):
+        from kb_audit.web.app import _build_analyzers
+        from kb_audit.config import Config
+        analyzers = _build_analyzers(Config())
+        names = [a.name() for a in analyzers]
+        assert names.index("internal_links") > names.index("broken_links")
+        assert names.index("internal_links") < names.index("references")
+
+
 class TestReferencesSummary:
     def test_no_scans(self, client):
         with patch("kb_audit.web.app._get_db") as mock_db:
@@ -2141,7 +2161,7 @@ class TestDemoMode:
             time.sleep(0.2)
 
         findings = client3.get("/api/findings?include_all=true").json()
-        assert len(findings) == 7
+        assert len(findings) == 6
 
     # Req 14: current pages do not appear in actionable queue
     def test_current_pages_not_in_findings_queue(self, tmp_path):
@@ -2270,3 +2290,323 @@ class TestDemoMode:
         history = client8.get("/api/scans").json()
         scan_ids = [h["scan_id"] for h in history]
         assert first_scan_id in scan_ids
+
+
+class TestActionabilityInPayload:
+    """API scan result payload includes actionability metadata.
+
+    These tests use unknown docs with requires_human_audit=False to verify
+    the distinction between classification status and human-audit actionability.
+    """
+
+    def test_scan_result_includes_requires_human_audit(self, client):
+        """Scan result trust_metadata should include requires_human_audit flag."""
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            db = mock_db.return_value
+            db.get_scan_history.return_value = [
+                {"scan_id": 1, "scan_status": "completed", "document_count": 1,
+                 "stale_count": 0, "needs_review_count": 0, "unknown_count": 1,
+                 "current_count": 0, "started_at": "2025-01-01T00:00:00Z",
+                 "completed_at": "2025-01-01T00:01:00Z", "error_message": None}
+            ]
+            result = {
+                "id": "doc-1",
+                "title": "Unknown Doc",
+                "url": "https://example.com/doc-1",
+                "source_type": "notion",
+                "last_modified": "2025-01-01T00:00:00Z",
+                "overall_status": "unknown",
+                "confidence": 0.1,
+                "confidence_reason": "No metadata",
+                "signals": [],
+                "suggested_replacement_id": None,
+                "trust_metadata": {
+                    "requires_human_audit": False,
+                    "audit_priority": "none",
+                    "importance_score": 0,
+                    "importance_reasons": [],
+                    "actionability_reason": "Insufficient importance signals (score 0)",
+                },
+                "trust_evidence": {
+                    "summary": "No evidence",
+                    "positive_evidence": [],
+                    "review_risks": [],
+                    "missing_evidence": ["No status field"],
+                    "recommended_action": "",
+                },
+            }
+            db.get_scan_results.return_value = [result]
+            db.get_findings.return_value = []
+            db.get_workflow_summary.return_value = {}
+
+            resp = client.get("/api/scans/1")
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert len(results) == 1
+        tm = results[0]["trust_metadata"]
+        assert "requires_human_audit" in tm
+        assert tm["requires_human_audit"] is False
+        assert "audit_priority" in tm
+
+    def test_non_actionable_unknown_has_no_workflow_finding(self, client):
+        """Non-actionable unknown does not receive a workflow dict."""
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            db = mock_db.return_value
+            db.get_scan_history.return_value = [
+                {"scan_id": 1, "scan_status": "completed", "document_count": 1,
+                 "stale_count": 0, "needs_review_count": 0, "unknown_count": 1,
+                 "current_count": 0, "started_at": "2025-01-01T00:00:00Z",
+                 "completed_at": "2025-01-01T00:01:00Z", "error_message": None}
+            ]
+            result = {
+                "id": "doc-no-workflow",
+                "title": "Low Importance Unknown",
+                "url": None,
+                "source_type": "notion",
+                "last_modified": "2025-01-01T00:00:00Z",
+                "overall_status": "unknown",
+                "confidence": 0.1,
+                "confidence_reason": "No metadata",
+                "signals": [],
+                "suggested_replacement_id": None,
+                "trust_metadata": {
+                    "requires_human_audit": False,
+                    "audit_priority": "none",
+                    "importance_score": 0,
+                },
+                "trust_evidence": {
+                    "summary": "", "positive_evidence": [],
+                    "review_risks": [], "missing_evidence": [], "recommended_action": "",
+                },
+            }
+            db.get_scan_results.return_value = [result]
+            db.get_findings.return_value = []  # no findings
+            db.get_workflow_summary.return_value = {}
+
+            resp = client.get("/api/scans/1")
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        # No workflow finding for this doc
+        assert results[0]["workflow"] is None
+
+
+# ---------------------------------------------------------------------------
+# Report actionability tests
+# ---------------------------------------------------------------------------
+
+
+class TestReportActionability:
+    """Report endpoint correctly separates status-flagged from human-audit-required."""
+
+    def _patch_db(self, mock_db, results):
+        db = mock_db.return_value
+        db.get_scan_results.return_value = results
+        db.get_scan_history.return_value = [{"scan_id": 9, "started_at": "2025-06-01T12:00:00"}]
+        return db
+
+    def _make_result(self, doc_id, status, trust_metadata=None):
+        r = _make_scan_result(doc_id, f"Doc {doc_id}")
+        r["overall_status"] = status
+        r["trust_metadata"] = trust_metadata or {}
+        return r
+
+    # ------------------------------------------------------------------
+    # JSON: new fields present
+    # ------------------------------------------------------------------
+
+    def test_json_report_has_status_flagged_count(self, client):
+        stale = self._make_result("s1", "stale")
+        needs_review = self._make_result("n1", "needs_review")
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [stale, needs_review])
+            resp = client.get("/api/scans/9/report")
+        data = resp.json()
+        assert data["status_flagged_count"] == 2
+        assert "human_audit_required_count" in data
+        assert "human_audit_required_documents" in data
+
+    def test_json_backward_compat_fields_still_present(self, client):
+        stale = self._make_result("s1", "stale")
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [stale])
+            resp = client.get("/api/scans/9/report")
+        data = resp.json()
+        assert "stale_count" in data
+        assert "needs_review_count" in data
+        assert "unknown_count" in data
+        assert "stale_documents" in data
+        assert "needs_review_documents" in data
+        assert "unknown_documents" in data
+
+    # ------------------------------------------------------------------
+    # JSON: explicit false flag suppresses audit count
+    # ------------------------------------------------------------------
+
+    def test_false_flag_unknown_not_in_human_audit_count(self, client):
+        unknown_no_audit = self._make_result("u1", "unknown", {
+            "requires_human_audit": False,
+            "audit_priority": "none",
+            "importance_score": 0,
+            "actionability_reason": "Insufficient importance signals",
+        })
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [unknown_no_audit])
+            resp = client.get("/api/scans/9/report")
+        data = resp.json()
+        # Still appears in unknown_documents (status visibility preserved)
+        assert len(data["unknown_documents"]) == 1
+        assert data["unknown_documents"][0]["id"] == "u1"
+        assert data["status_flagged_count"] == 1
+        # But NOT counted as a human audit
+        assert data["human_audit_required_count"] == 0
+        assert data["human_audit_required_documents"] == []
+
+    def test_true_flag_unknown_counted_in_human_audit(self, client):
+        unknown_audit = self._make_result("u2", "unknown", {
+            "requires_human_audit": True,
+            "audit_priority": "medium",
+            "importance_score": 3,
+        })
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [unknown_audit])
+            resp = client.get("/api/scans/9/report")
+        data = resp.json()
+        assert data["human_audit_required_count"] == 1
+        assert data["human_audit_required_documents"][0]["id"] == "u2"
+
+    def test_legacy_unknown_no_flag_counts_as_human_audit(self, client):
+        legacy = self._make_result("u3", "unknown", {})  # no requires_human_audit key
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [legacy])
+            resp = client.get("/api/scans/9/report")
+        data = resp.json()
+        assert data["human_audit_required_count"] == 1
+
+    def test_mixed_flags_count_correctly(self, client):
+        stale = self._make_result("s1", "stale", {"requires_human_audit": True})
+        suppressed = self._make_result("n1", "needs_review", {"requires_human_audit": False})
+        legacy_unknown = self._make_result("u1", "unknown", {})
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [stale, suppressed, legacy_unknown])
+            resp = client.get("/api/scans/9/report")
+        data = resp.json()
+        assert data["status_flagged_count"] == 3
+        assert data["human_audit_required_count"] == 2  # stale + legacy_unknown; suppressed excluded
+        ids = {d["id"] for d in data["human_audit_required_documents"]}
+        assert ids == {"s1", "u1"}
+
+    # ------------------------------------------------------------------
+    # Text format
+    # ------------------------------------------------------------------
+
+    def test_text_report_has_status_flagged_and_human_audit_summary_lines(self, client):
+        stale = self._make_result("s1", "stale", {"requires_human_audit": True})
+        suppressed = self._make_result("u1", "unknown", {"requires_human_audit": False})
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [stale, suppressed])
+            resp = client.get("/api/scans/9/report?format=text")
+        text = resp.text
+        assert "Status-flagged documents: 2" in text
+        assert "Human audits required: 1" in text
+
+    def test_text_report_marks_false_flag_as_not_required(self, client):
+        suppressed = self._make_result("u1", "unknown", {"requires_human_audit": False})
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [suppressed])
+            resp = client.get("/api/scans/9/report?format=text")
+        text = resp.text
+        assert "Human audit: not required" in text
+        assert "Human audit: required" not in text
+
+    def test_text_report_marks_true_flag_as_required(self, client):
+        stale = self._make_result("s1", "stale", {"requires_human_audit": True})
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [stale])
+            resp = client.get("/api/scans/9/report?format=text")
+        text = resp.text
+        assert "Human audit: required" in text
+
+    def test_text_report_legacy_no_flag_marked_required(self, client):
+        legacy = self._make_result("u1", "unknown", {})
+        with patch("kb_audit.web.app._get_db") as mock_db:
+            self._patch_db(mock_db, [legacy])
+            resp = client.get("/api/scans/9/report?format=text")
+        text = resp.text
+        assert "Human audit: required" in text
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _requires_human_audit helper
+# ---------------------------------------------------------------------------
+
+
+class TestRequiresHumanAudit:
+    """Direct unit tests for the backend _requires_human_audit() helper."""
+
+    def test_current_always_false(self):
+        from kb_audit.web.app import _requires_human_audit
+        assert _requires_human_audit({"overall_status": "current"}) is False
+
+    def test_current_with_true_flag_still_false(self):
+        from kb_audit.web.app import _requires_human_audit
+        # current overrides even an explicit true flag
+        assert _requires_human_audit({
+            "overall_status": "current",
+            "trust_metadata": {"requires_human_audit": True},
+        }) is False
+
+    def test_explicit_true(self):
+        from kb_audit.web.app import _requires_human_audit
+        assert _requires_human_audit({
+            "overall_status": "unknown",
+            "trust_metadata": {"requires_human_audit": True},
+        }) is True
+
+    def test_explicit_false(self):
+        from kb_audit.web.app import _requires_human_audit
+        # Status-flagged but not audit-required: classification status ≠ actionability
+        assert _requires_human_audit({
+            "overall_status": "unknown",
+            "trust_metadata": {"requires_human_audit": False},
+        }) is False
+
+    def test_explicit_false_needs_review(self):
+        from kb_audit.web.app import _requires_human_audit
+        assert _requires_human_audit({
+            "overall_status": "needs_review",
+            "trust_metadata": {"requires_human_audit": False},
+        }) is False
+
+    def test_legacy_unknown_no_flag(self):
+        from kb_audit.web.app import _requires_human_audit
+        assert _requires_human_audit({
+            "overall_status": "unknown",
+            "trust_metadata": {},
+        }) is True
+
+    def test_legacy_needs_review_no_flag(self):
+        from kb_audit.web.app import _requires_human_audit
+        assert _requires_human_audit({
+            "overall_status": "needs_review",
+            "trust_metadata": {},
+        }) is True
+
+    def test_legacy_stale_no_flag(self):
+        from kb_audit.web.app import _requires_human_audit
+        assert _requires_human_audit({
+            "overall_status": "stale",
+            "trust_metadata": {},
+        }) is True
+
+    def test_legacy_no_trust_metadata_key(self):
+        from kb_audit.web.app import _requires_human_audit
+        # trust_metadata key absent entirely — still legacy fallback
+        assert _requires_human_audit({"overall_status": "unknown"}) is True
+
+    def test_none_trust_metadata(self):
+        from kb_audit.web.app import _requires_human_audit
+        # trust_metadata explicitly None — still legacy fallback
+        assert _requires_human_audit({
+            "overall_status": "stale",
+            "trust_metadata": None,
+        }) is True

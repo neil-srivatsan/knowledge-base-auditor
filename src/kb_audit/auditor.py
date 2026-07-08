@@ -10,7 +10,8 @@ from kb_audit.db import Database, LeaseLostError
 from kb_audit.models import AuditResult, Document, Severity, StalenessSignal
 from kb_audit.reporters.base import Reporter
 from kb_audit.sources.base import DocumentSource
-from kb_audit.trust import classify, compute_incoming_ref_counts
+from kb_audit.titles import normalize_title
+from kb_audit.trust import classify, compute_audit_actionability, compute_incoming_ref_counts, parse_applicability_scope
 
 logger = logging.getLogger(__name__)
 
@@ -137,12 +138,21 @@ class Auditor:
             # 4. Classify each document using the trust classifier
             doc_by_id = {doc.id: doc for doc in documents}
             scan_titles = {doc.id: doc.title for doc in documents}
+            # Pre-compute applicability scopes once so classify() can suppress
+            # scan-local version/year supersession when sibling scopes differ.
+            scan_scopes = {
+                doc.id: scope
+                for doc in documents
+                for scope in (parse_applicability_scope(doc),)
+                if scope
+            }
             raw_results: dict[str, AuditResult] = {}
             for doc in documents:
                 signals = all_signals.get(doc.id, [])
                 verdict = classify(
                     doc, signals, incoming_refs.get(doc.id, 0),
                     scan_titles=scan_titles,
+                    scan_scopes=scan_scopes if scan_scopes else None,
                 )
                 result = AuditResult(
                     document=doc,
@@ -160,6 +170,9 @@ class Auditor:
                         "canonical": verdict.metadata.canonical,
                         "review_cadence": verdict.metadata.review_cadence,
                         "applies_to": verdict.metadata.applies_to,
+                        "applicability_scope": verdict.metadata.applicability_scope,
+                        "lifecycle": verdict.metadata.lifecycle,
+                        "lifecycle_evidence": verdict.metadata.lifecycle_evidence,
                     },
                     trust_evidence={
                         "summary": verdict.evidence.summary,
@@ -282,6 +295,32 @@ class Auditor:
                             "missing_evidence": target.trust_evidence.get("missing_evidence", []),
                             "recommended_action": "Use as trusted reference",
                         }
+
+            # 5b. Compute actionability for every result now that all statuses
+            #     are final.  Merge actionability fields into trust_metadata so
+            #     they are persisted and serialised to API payloads without any
+            #     schema migration.
+            for doc in documents:
+                result = raw_results[doc.id]
+                doc_base, _, _ = normalize_title(doc.title)
+                has_siblings = any(
+                    normalize_title(scan_titles[did])[0] == doc_base
+                    for did in scan_titles
+                    if did != doc.id
+                )
+                n_stale = ref_stale_count.get(doc.id, 0)
+                is_replacement = n_stale > 0
+                actionability = compute_audit_actionability(
+                    status=result.status,
+                    trust_metadata=result.trust_metadata,
+                    trust_evidence=result.trust_evidence,
+                    signals=result.signals,
+                    incoming_ref_count=incoming_refs.get(doc.id, 0),
+                    has_version_siblings=has_siblings,
+                    is_suggested_replacement=is_replacement,
+                    n_stale_siblings=n_stale,
+                )
+                result.trust_metadata.update(actionability)
 
             results = list(raw_results.values())
 

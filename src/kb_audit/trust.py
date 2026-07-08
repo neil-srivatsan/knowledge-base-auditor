@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from kb_audit.models import Document, Severity, StalenessSignal, Status
+from kb_audit.models import AuditPriority, Document, Lifecycle, Severity, StalenessSignal, Status
 from kb_audit.titles import normalize_title  # noqa: F401 — re-exported
 
 # ---------------------------------------------------------------------------
@@ -75,6 +75,48 @@ _APPLIES_TO_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Structured applicability/scope fields — used for scope-aware supersession.
+# Each field captures one dimension of a document's intended applicability.
+_SCOPE_PRODUCT_RE = re.compile(
+    r"(?:^|\n)\s*Product\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_VERSION_RE = re.compile(
+    r"(?:^|\n)\s*Version\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_AUDIENCE_RE = re.compile(
+    r"(?:^|\n)\s*Audience\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_ENVIRONMENT_RE = re.compile(
+    r"(?:^|\n)\s*Environment\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_REGION_RE = re.compile(
+    r"(?:^|\n)\s*Region\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_PLAN_RE = re.compile(
+    r"(?:^|\n)\s*Plan\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_FEATURE_STATE_RE = re.compile(
+    r"(?:^|\n)\s*Feature\s+state\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_FEATURE_FLAG_RE = re.compile(
+    r"(?:^|\n)\s*Feature\s+flag\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+_SCOPE_COMPACT_RE = re.compile(
+    r"(?:^|\n)\s*Scope\s*[:]\s*(\S.+?)(?:\n|$)", re.IGNORECASE
+)
+
+# Ordered list for compact iteration during parsing
+_SCOPE_FIELD_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("product", _SCOPE_PRODUCT_RE),
+    ("version", _SCOPE_VERSION_RE),
+    ("audience", _SCOPE_AUDIENCE_RE),
+    ("environment", _SCOPE_ENVIRONMENT_RE),
+    ("region", _SCOPE_REGION_RE),
+    ("plan", _SCOPE_PLAN_RE),
+    ("feature_state", _SCOPE_FEATURE_STATE_RE),
+    ("feature_flag", _SCOPE_FEATURE_FLAG_RE),
+]
+
 # Cadence text → maximum days between reviews
 _CADENCE_DAYS: dict[str, int] = {
     "weekly": 14,
@@ -116,6 +158,44 @@ _SUPERSESSION_PHRASES: list[tuple[re.Pattern[str], str]] = [
 
 # Title normalization is in kb_audit.titles; normalize_title is re-exported above.
 
+# ---------------------------------------------------------------------------
+# Lifecycle detection patterns (only patterns NOT already covered above)
+# ---------------------------------------------------------------------------
+
+# Status keywords → lifecycle mapping (ordered by priority)
+_LIFECYCLE_STATUS_MAP: list[tuple[set[str], Lifecycle]] = [
+    ({"deprecated", "retired", "obsolete", "end-of-life", "eol", "sunset"}, "deprecated"),
+    ({"superseded"}, "superseded"),
+    ({"archived"}, "archived"),
+    ({"legacy"}, "deprecated"),
+    ({"current"}, "current"),
+    ({"supported", "active", "approved", "live"}, "supported"),
+    ({"draft", "wip", "work-in-progress", "work in progress"}, "draft"),
+    ({"experimental", "beta", "preview", "alpha", "labs"}, "experimental"),
+]
+
+# Title clues for lifecycle (regex, lifecycle, evidence label)
+_LIFECYCLE_TITLE_PATTERNS: list[tuple[re.Pattern[str], Lifecycle, str]] = [
+    (re.compile(r"\(\s*deprecated\s*\)", re.IGNORECASE), "deprecated", "Title contains '(deprecated)'"),
+    (re.compile(r"\(\s*legacy\s*\)", re.IGNORECASE), "deprecated", "Title contains '(legacy)'"),
+    (re.compile(r"\(\s*old\s*\)", re.IGNORECASE), "deprecated", "Title contains '(old)'"),
+    (re.compile(r"\bdraft\b", re.IGNORECASE), "draft", "Title contains 'draft'"),
+    (re.compile(r"\b(?:beta|preview)\b", re.IGNORECASE), "experimental", "Title contains beta/preview"),
+    (re.compile(r"\bexperimental\b", re.IGNORECASE), "experimental", "Title contains 'experimental'"),
+]
+
+# Body phrases for lifecycle states not already covered by _SUPERSESSION_PHRASES
+_LIFECYCLE_BODY_PATTERNS: list[tuple[re.Pattern[str], Lifecycle, str]] = [
+    (re.compile(r"\bsubject\s+to\s+change\b", re.IGNORECASE),
+     "experimental", "Body text says content is subject to change"),
+    (re.compile(r"\bnot\s+for\s+production\s+use\b", re.IGNORECASE),
+     "experimental", "Body text says not for production use"),
+    (re.compile(r"\b(?:beta|preview)\s+(?:feature|documentation|release)\b", re.IGNORECASE),
+     "experimental", "Body text indicates beta/preview content"),
+    (re.compile(r"\bwork[- ]in[- ]progress\b", re.IGNORECASE),
+     "draft", "Body text indicates work-in-progress"),
+]
+
 # Freshness thresholds (days)
 _FRESH_REVIEWED_DAYS = 180   # "Last reviewed" within 6 months = positive trust
 _OLD_REVIEWED_DAYS = 365     # "Last reviewed" over 1 year ago = risk
@@ -134,6 +214,9 @@ class TrustMetadata:
     canonical: bool = False
     review_cadence: str | None = None
     applies_to: str | None = None
+    lifecycle: Lifecycle = "unknown"
+    lifecycle_evidence: list[str] = field(default_factory=list)
+    applicability_scope: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -157,6 +240,16 @@ class TrustVerdict:
     metadata: TrustMetadata = field(default_factory=TrustMetadata)
     evidence: TrustEvidence = field(default_factory=TrustEvidence)
 
+    @property
+    def lifecycle(self) -> Lifecycle:
+        """Lifecycle state, stored in metadata."""
+        return self.metadata.lifecycle
+
+    @property
+    def lifecycle_evidence(self) -> list[str]:
+        """Lifecycle evidence, stored in metadata."""
+        return self.metadata.lifecycle_evidence
+
 
 def classify(
     doc: Document,
@@ -164,6 +257,7 @@ def classify(
     incoming_ref_count: int = 0,
     *,
     scan_titles: dict[str, str] | None = None,
+    scan_scopes: dict[str, dict[str, str]] | None = None,
 ) -> TrustVerdict:
     """Classify a single document's trust status.
 
@@ -188,17 +282,30 @@ def classify(
     # Scan-local supersession (only adds evidence, never sole stale trigger
     # unless the title has a clearly stale suffix like "(old)").
     if scan_titles is not None:
-        supersession = _check_scan_supersession(doc, scan_titles)
+        supersession = _check_scan_supersession(
+            doc, scan_titles,
+            my_scope=parsed.applicability_scope,
+            scan_scopes=scan_scopes,
+        )
         stale_reasons.extend(supersession)
+
+    # Detect lifecycle from existing evidence (no duplicate parsing)
+    meta.lifecycle, meta.lifecycle_evidence = _detect_lifecycle(doc, parsed, stale_reasons)
+
+    # Apply lifecycle → status policy: adjusts stale reasons and injects
+    # lifecycle-derived review risks before the priority ladder runs.
+    policy = _apply_lifecycle_status_policy(meta.lifecycle, stale_reasons, trust_reasons)
+    stale_reasons = policy.effective_stale_reasons
 
     if stale_reasons:
         # Contradiction detection: if there is both stale evidence AND strong
         # authoritative evidence (e.g. Status: Legacy but referenced by 5 docs),
         # force needs_review instead of stale — a human must arbitrate.
-        has_contradiction = bool(stale_reasons and trust_reasons)
+        has_contradiction = bool(trust_reasons or policy.contradiction_reasons)
         if has_contradiction:
             all_reasons = (
                 ["Contradictory evidence: stale signals conflict with trust signals"]
+                + policy.contradiction_reasons
                 + stale_reasons + trust_reasons
             )
             confidence = round(min(0.70, _stale_confidence(signals, parsed, stale_reasons)), 2)
@@ -221,6 +328,11 @@ def classify(
 
     # --- Step 2: Hard risk evidence → needs_review ---
     hard_risk, soft_risk = _check_risk_evidence(signals, parsed)
+
+    # Merge lifecycle-derived review risks into hard risks
+    if policy.lifecycle_review_risks:
+        hard_risk = hard_risk + policy.lifecycle_review_risks
+
     if hard_risk:
         all_risk = hard_risk + soft_risk
         context = _review_context(signals, incoming_ref_count, parsed, all_risk)
@@ -299,6 +411,7 @@ class _ParsedMeta:
     canonical: bool = False
     review_cadence: str | None = None
     applies_to: str | None = None
+    applicability_scope: dict[str, str] = field(default_factory=dict)
 
 
 def _parse_body_metadata(doc: Document) -> _ParsedMeta:
@@ -332,6 +445,29 @@ def _parse_body_metadata(doc: Document) -> _ParsedMeta:
     m = _APPLIES_TO_RE.search(doc.content)
     if m:
         meta.applies_to = m.group(1).strip()
+
+    # Parse structured applicability scope fields
+    scope: dict[str, str] = {}
+    for key, pattern in _SCOPE_FIELD_PATTERNS:
+        m = pattern.search(doc.content)
+        if m:
+            scope[key] = m.group(1).strip()
+    # Compact Scope: line — semicolon-separated key=value pairs.
+    # Only whitelisted dimension keys (derived from _SCOPE_FIELD_PATTERNS) are
+    # accepted; unknown keys are ignored so arbitrary prose cannot suppress
+    # scan-local stale detection via _scopes_coexist().
+    _SCOPE_ALLOWED_KEYS = frozenset(key for key, _ in _SCOPE_FIELD_PATTERNS)
+    m = _SCOPE_COMPACT_RE.search(doc.content)
+    if m:
+        for pair in m.group(1).split(";"):
+            pair = pair.strip()
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                norm_key = k.strip().lower().replace(" ", "_")
+                if norm_key in _SCOPE_ALLOWED_KEYS and v.strip():
+                    scope.setdefault(norm_key, v.strip())
+    meta.applicability_scope = scope
+
     return meta
 
 
@@ -350,6 +486,7 @@ def _build_trust_metadata(doc: Document, parsed: _ParsedMeta) -> TrustMetadata:
         canonical=parsed.canonical,
         review_cadence=parsed.review_cadence,
         applies_to=parsed.applies_to,
+        applicability_scope=dict(parsed.applicability_scope),
     )
 
 
@@ -406,6 +543,17 @@ def _build_evidence(
     )
 
 
+def parse_applicability_scope(doc: Document) -> dict[str, str]:
+    """Extract structured applicability scope from a document's body content.
+
+    Returns a dict mapping dimension keys to values, e.g.
+    ``{"version": "v1", "environment": "prod"}``.
+    Returns an empty dict when no scope fields are found.
+    Used by the auditor to pre-compute ``scan_scopes`` for scope-aware supersession.
+    """
+    return _parse_body_metadata(doc).applicability_scope
+
+
 def parse_body_metadata(doc: Document) -> dict:
     """Public helper — returns parsed metadata as a dict for storage/display."""
     meta = _parse_body_metadata(doc)
@@ -420,6 +568,7 @@ def parse_body_metadata(doc: Document) -> dict:
         "parsed_canonical": meta.canonical,
         "parsed_review_cadence": meta.review_cadence,
         "parsed_applies_to": meta.applies_to,
+        "parsed_applicability_scope": dict(meta.applicability_scope),
     }
 
 
@@ -448,6 +597,11 @@ def _check_stale_evidence(
             found = s.details.get("found_version", "")
             current = s.details.get("current_version", "")
             reasons.append(f"References outdated version {found} (current is {current})")
+        elif s.signal_type == "replacement_link":
+            target = s.details.get("target_title", "another document")
+            reasons.append(
+                f"Explicitly links to '{target}' as the replacement for this document"
+            )
 
     # Body status = Legacy / Deprecated / Archived / Superseded etc. → stale
     if parsed.status_text:
@@ -492,6 +646,8 @@ def _stale_confidence(
             score += 0.50
         elif s.signal_type == "version_ref":
             score += 0.30
+        elif s.signal_type == "replacement_link":
+            score += 0.45
         elif s.signal_type == "age":
             has_age = True
             score += 0.15 if s.severity == Severity.CRITICAL else 0.10
@@ -549,6 +705,13 @@ def _check_risk_evidence(
             title = s.details.get("similar_title", "another document")
             sim = s.details.get("similarity", 0)
             hard.append(f"{sim:.0f}% similar to '{title}'")
+        elif s.signal_type == "broken_internal_link":
+            url = s.details.get("url", "")
+            hard.append(f"Internal link cannot be resolved: {url}")
+        elif s.signal_type == "ambiguous_internal_link":
+            url = s.details.get("url", "")
+            n = len(s.details.get("matching_doc_ids", []))
+            hard.append(f"Ambiguous internal link '{url}' matches {n} documents")
         elif s.signal_type == "age" and s.severity == Severity.CRITICAL:
             age_days = s.details.get("age_days", 0)
             hard.append(f"Not modified in {age_days} days")
@@ -587,6 +750,8 @@ def _risk_confidence(
             score += 0.10
         elif s.signal_type == "broken_link":
             score += 0.08
+        elif s.signal_type in ("broken_internal_link", "ambiguous_internal_link"):
+            score += 0.10
         elif s.signal_type == "near_duplicate":
             score += 0.15
         elif s.signal_type == "age" and s.severity == Severity.CRITICAL:
@@ -655,6 +820,17 @@ def _check_trust_evidence(
     if resolved_out and not unresolved_out:
         supporting.append(
             f"All {len(resolved_out)} outgoing references resolve correctly"
+        )
+
+    # Internal links (structured, from source): resolved with no broken ones
+    resolved_internal = [s for s in signals if s.signal_type == "resolved_internal_link"]
+    broken_internal = [
+        s for s in signals
+        if s.signal_type in ("broken_internal_link", "ambiguous_internal_link")
+    ]
+    if resolved_internal and not broken_internal:
+        supporting.append(
+            f"All {len(resolved_internal)} internal links resolve correctly"
         )
 
     # Recent last-reviewed date
@@ -820,19 +996,41 @@ def _unknown_confidence(doc: Document) -> float:
 # Title normalization & scan-local supersession
 # ---------------------------------------------------------------------------
 
+def _scopes_coexist(scope_a: dict[str, str], scope_b: dict[str, str]) -> bool:
+    """Return True if scopes explicitly indicate documents serve different audiences.
+
+    Requires both scopes to share at least one dimension key with differing
+    values — e.g. both have ``version`` but one is ``v1`` and the other ``v2``.
+    Returns False when either scope is empty, or they share no keys, so that
+    missing scope defaults to the existing (conservative) supersession behavior.
+    """
+    for key in scope_a:
+        if key in scope_b:
+            if scope_a[key].strip().lower() != scope_b[key].strip().lower():
+                return True
+    return False
+
+
 def _check_scan_supersession(
     doc: Document,
     scan_titles: dict[str, str],
+    my_scope: dict[str, str] | None = None,
+    scan_scopes: dict[str, dict[str, str]] | None = None,
 ) -> list[str]:
     """Return stale reasons if this doc is superseded by a sibling in the scan.
 
     Rules:
     - A doc with a stale suffix like "(old)" is stale if a base sibling exists.
-    - A doc with an older trailing year is stale if a newer year sibling exists.
-    - A doc with an older trailing version is stale if a newer version sibling exists.
+      Hard title suffixes are never suppressed by scope.
+    - A doc with an older trailing year is stale if a newer year sibling exists,
+      unless explicit scope shows the two docs validly coexist.
+    - A doc with an older trailing version is stale if a newer version sibling
+      exists, unless explicit scope shows they validly coexist.
     """
     reasons: list[str] = []
     my_base, my_ver, my_stale = normalize_title(doc.title)
+    _my_scope = my_scope or {}
+    _scan_scopes = scan_scopes or {}
 
     # Build index of scan siblings with the same base title
     siblings: list[tuple[str, str, str | None, str | None]] = []  # (id, title, ver, stale)
@@ -846,47 +1044,484 @@ def _check_scan_supersession(
     if not siblings:
         return reasons
 
-    # Rule 1: stale suffix like "(old)" + base or newer sibling exists → stale
+    # Rule 1: stale suffix like "(old)" + base or newer sibling exists → always stale.
+    # Hard title suffixes are explicit negative evidence; scope cannot suppress them.
     if my_stale:
         reasons.append(
             f"Title has stale suffix '{my_stale}' and a newer page '{siblings[0][1]}' exists in this scan"
         )
         return reasons
 
-    # Rule 2: trailing year — older year is stale when newer year exists
+    # Rule 2: trailing year — older year is stale when newer year exists,
+    # unless explicit scope shows the two docs validly coexist.
     if my_ver and my_ver.isdigit() and len(my_ver) == 4:
         my_year = int(my_ver)
-        for _, sib_title, sib_ver, _ in siblings:
+        for sib_id, sib_title, sib_ver, _ in siblings:
             if sib_ver and sib_ver.isdigit() and len(sib_ver) == 4:
                 sib_year = int(sib_ver)
                 if sib_year > my_year:
-                    reasons.append(
-                        f"Superseded by a related page in this scan: '{sib_title}' (year {sib_ver} > {my_ver})"
-                    )
-                    return reasons
+                    sib_scope = _scan_scopes.get(sib_id, {})
+                    if not _scopes_coexist(_my_scope, sib_scope):
+                        reasons.append(
+                            f"Superseded by a related page in this scan: '{sib_title}' (year {sib_ver} > {my_ver})"
+                        )
+                        return reasons
             elif sib_ver is None:
                 # Base title (no year) exists — might be the canonical version
                 # Only flag as stale if the base sibling is not itself stale-suffixed
                 pass
 
-    # Rule 3: trailing version — older version is stale when newer exists
+    # Rule 3: trailing version — older version is stale when newer exists,
+    # unless explicit scope shows the two docs validly coexist.
     if my_ver and not (my_ver.isdigit() and len(my_ver) == 4):
         # Extract numeric version for comparison
         my_nums = re.findall(r"\d+", my_ver)
         if my_nums:
             my_num = tuple(int(n) for n in my_nums)
-            for _, sib_title, sib_ver, _ in siblings:
+            for sib_id, sib_title, sib_ver, _ in siblings:
                 if sib_ver and not (sib_ver.isdigit() and len(sib_ver) == 4):
                     sib_nums = re.findall(r"\d+", sib_ver)
                     if sib_nums:
                         sib_num = tuple(int(n) for n in sib_nums)
                         if sib_num > my_num:
-                            reasons.append(
-                                f"Superseded by a related page in this scan: '{sib_title}' (version {sib_ver} > {my_ver})"
-                            )
-                            return reasons
+                            sib_scope = _scan_scopes.get(sib_id, {})
+                            if not _scopes_coexist(_my_scope, sib_scope):
+                                reasons.append(
+                                    f"Superseded by a related page in this scan: '{sib_title}' (version {sib_ver} > {my_ver})"
+                                )
+                                return reasons
 
     return reasons
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle / stale-reason predicates
+# ---------------------------------------------------------------------------
+
+
+def _is_scan_local_version_inference(reason: str) -> bool:
+    """True if *reason* is a weak year/version sibling inference.
+
+    These are inferred from title similarity (e.g. "API Guide v1" vs
+    "API Guide v2") and are weak evidence that can be suppressed by
+    lifecycle ``supported`` or ``current``.
+    """
+    return "related page in this scan" in reason.lower()
+
+
+def _is_title_stale_suffix(reason: str) -> bool:
+    """True if *reason* comes from a parenthetical title suffix like '(old)'.
+
+    Title stale suffixes are explicit negative evidence and must NOT be
+    suppressed by lifecycle ``supported``.
+    """
+    return "stale suffix" in reason.lower()
+
+
+# Suffixes that are cautionary (draft) vs hard-negative (old, deprecated, etc.)
+_CAUTIONARY_TITLE_SUFFIXES = {"draft"}
+
+
+def _is_cautionary_title_suffix(reason: str) -> bool:
+    """True if the title stale suffix is cautionary rather than hard-negative.
+
+    ``(draft)`` is cautionary — it aligns with lifecycle ``draft`` and should
+    follow the draft policy (needs_review), not be treated as hard stale evidence.
+    """
+    if not _is_title_stale_suffix(reason):
+        return False
+    r = reason.lower()
+    return any(f"'{s}'" in r or f"({s})" in r for s in _CAUTIONARY_TITLE_SUFFIXES)
+
+
+def _is_scan_local_inferred_supersession(reason: str) -> bool:
+    """True for any scan-local supersession evidence (version OR title suffix).
+
+    Used by lifecycle detection to defer scan-local evidence to a lower
+    priority step.  For policy filtering, prefer the more specific
+    ``_is_scan_local_version_inference`` and ``_is_title_stale_suffix``.
+    """
+    return _is_scan_local_version_inference(reason) or _is_title_stale_suffix(reason)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle detection
+# ---------------------------------------------------------------------------
+
+def _detect_lifecycle(
+    doc: Document,
+    parsed: _ParsedMeta,
+    stale_reasons: list[str],
+) -> tuple[Lifecycle, list[str]]:
+    """Derive a lifecycle label from already-parsed metadata and stale evidence.
+
+    Returns (lifecycle, evidence_list).  Does not duplicate stale detection —
+    reuses *parsed* and *stale_reasons* produced by the existing classifier.
+    """
+    evidence: list[str] = []
+
+    # 1. Source metadata: archived flag (strongest — comes from the platform)
+    if doc.metadata.get("archived"):
+        evidence.append("Source metadata indicates page is archived")
+        return "archived", evidence
+
+    # 2. Explicit replacement/supersession metadata
+    if parsed.replaced_by:
+        evidence.append(f"Replaced by '{parsed.replaced_by}'")
+        return "superseded", evidence
+
+    # 3. Explicit deprecation metadata
+    if parsed.deprecated_as_of:
+        evidence.append(f"Deprecated as of {parsed.deprecated_as_of}")
+        return "deprecated", evidence
+
+    # 4. Stale/negative status keywords from Status field
+    #    (deprecated, legacy, archived, superseded, etc. — checked before
+    #    positive keywords so that negative evidence outranks positive)
+    if parsed.status_text:
+        status_lower = parsed.status_text.lower()
+        for keywords, lifecycle in _LIFECYCLE_STATUS_MAP:
+            if lifecycle in ("deprecated", "superseded", "archived"):
+                if any(kw in status_lower for kw in keywords):
+                    evidence.append(f"Status field indicates '{parsed.status_text}'")
+                    return lifecycle, evidence
+
+    # 5. Stale reasons from body-text supersession phrases and explicit evidence
+    #    (skip scan-local inferred supersession — that's checked at step 10)
+    for reason in stale_reasons:
+        reason_lower = reason.lower()
+        # Skip inferred scan-local supersession (handled at lower priority)
+        if _is_scan_local_inferred_supersession(reason):
+            continue
+        if "superseded" in reason_lower or "replaced" in reason_lower:
+            evidence.append(reason)
+            return "superseded", evidence
+        if "deprecated" in reason_lower:
+            evidence.append(reason)
+            return "deprecated", evidence
+        if "archived" in reason_lower:
+            evidence.append(reason)
+            return "archived", evidence
+        if "no longer maintained" in reason_lower or "no longer authoritative" in reason_lower:
+            evidence.append(reason)
+            return "deprecated", evidence
+        if "do not use" in reason_lower:
+            evidence.append(reason)
+            return "deprecated", evidence
+
+    # 6. Title lifecycle clues (outrank positive status keywords)
+    for pat, lifecycle, label in _LIFECYCLE_TITLE_PATTERNS:
+        if pat.search(doc.title):
+            evidence.append(label)
+            return lifecycle, evidence
+
+    # 7. Body-text lifecycle phrases (draft, experimental — not covered above)
+    for pat, lifecycle, label in _LIFECYCLE_BODY_PATTERNS:
+        if pat.search(doc.content):
+            evidence.append(label)
+            return lifecycle, evidence
+
+    # 8. Positive/neutral status keywords (current, supported, active, etc.)
+    if parsed.status_text:
+        status_lower = parsed.status_text.lower()
+        for keywords, lifecycle in _LIFECYCLE_STATUS_MAP:
+            if lifecycle not in ("deprecated", "superseded", "archived"):
+                if any(kw in status_lower for kw in keywords):
+                    evidence.append(f"Status field indicates '{parsed.status_text}'")
+                    return lifecycle, evidence
+
+    # 9. Canonical marker
+    if parsed.canonical:
+        evidence.append("Marked as canonical document")
+        return "current", evidence
+
+    # 10. Explicit applicability evidence (outranks inferred supersession)
+    if parsed.applies_to:
+        evidence.append(f"Applies to: {parsed.applies_to}")
+        return "supported", evidence
+
+    # 11. Inferred scan-local supersession from title similarity
+    for reason in stale_reasons:
+        if _is_scan_local_inferred_supersession(reason):
+            suffix = " (inferred from title suffix)" if _is_title_stale_suffix(reason) else " (inferred from title similarity)"
+            evidence.append(f"{reason}{suffix}")
+            return "superseded", evidence
+
+    return "unknown", evidence
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle → status policy
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _LifecyclePolicy:
+    """Result of applying lifecycle semantics to status classification inputs."""
+
+    effective_stale_reasons: list[str]
+    lifecycle_review_risks: list[str]
+    contradiction_reasons: list[str]
+
+
+def _apply_lifecycle_status_policy(
+    lifecycle: Lifecycle,
+    stale_reasons: list[str],
+    trust_reasons: list[str],
+) -> _LifecyclePolicy:
+    """Adjust stale reasons and inject review risks based on lifecycle meaning.
+
+    This is the single place where lifecycle semantics influence audit status.
+    It does NOT decide the final status — it adjusts the *inputs* that
+    ``classify()`` feeds into its existing priority ladder.
+    """
+    effective = list(stale_reasons)
+    risks: list[str] = []
+    contradictions: list[str] = []
+
+    if lifecycle in ("deprecated", "superseded", "archived"):
+        # Negative lifecycle: stale reasons stay.  But if there is strong
+        # trust evidence contradicting the lifecycle, inject a review risk
+        # so that classify() pushes to needs_review instead of stale.
+        if trust_reasons:
+            contradictions.append(
+                f"Lifecycle is '{lifecycle}' but trust evidence exists — human review needed"
+            )
+        return _LifecyclePolicy(effective, risks, contradictions)
+
+    if lifecycle in ("experimental", "draft"):
+        # Do not classify stale solely for being experimental/draft.
+        # Remove weak version/year inference and cautionary title suffixes
+        # like (draft).  Hard-negative suffixes like (old), (deprecated) stay.
+        effective = [
+            r for r in effective
+            if not _is_scan_local_version_inference(r) and not _is_cautionary_title_suffix(r)
+        ]
+        # If there's no remaining explicit stale evidence, inject a review
+        # risk to ensure needs_review (not unknown or current).
+        if not effective:
+            risks.append(
+                f"Document lifecycle is '{lifecycle}' — needs review before relying on content"
+            )
+        return _LifecyclePolicy(effective, risks, contradictions)
+
+    if lifecycle == "supported":
+        # Supported older versions may coexist with newer siblings.
+        # Remove weak version/year inference only — explicit negative title
+        # suffixes like (archived), (obsolete), (copy), (backup) must not
+        # be suppressed by 'supported'.
+        filtered = [r for r in effective if not _is_scan_local_version_inference(r)]
+        if len(filtered) < len(effective):
+            contradictions.append(
+                "Lifecycle is 'supported' — scan-local version supersession suppressed"
+            )
+        effective = filtered
+        return _LifecyclePolicy(effective, risks, contradictions)
+
+    if lifecycle == "current":
+        # Declared-current should not be stale solely from weak version
+        # inference.  Title stale suffixes remain as explicit evidence.
+        non_inferred = [r for r in effective if not _is_scan_local_version_inference(r)]
+        inferred = [r for r in effective if _is_scan_local_version_inference(r)]
+        if inferred and not non_inferred:
+            risks.append(
+                "Lifecycle is 'current' but inferred version supersession exists — needs review"
+            )
+            effective = []
+        else:
+            effective = non_inferred
+        return _LifecyclePolicy(effective, risks, contradictions)
+
+    # lifecycle == "unknown" — no adjustments, fall through to existing logic
+    return _LifecyclePolicy(effective, risks, contradictions)
+
+
+# ---------------------------------------------------------------------------
+# Audit actionability
+# ---------------------------------------------------------------------------
+
+#: Importance score threshold above which a conditionally-actionable document
+#: is promoted to a workflow finding.
+IMPORTANCE_THRESHOLD: int = 2
+
+#: Lifecycles that always require human audit regardless of importance.
+_ALWAYS_ACTIONABLE_LIFECYCLES: frozenset[str] = frozenset(
+    {"deprecated", "superseded", "archived", "experimental", "draft"}
+)
+
+#: Signal types that always make a document actionable (hard risks).
+_HARD_RISK_SIGNAL_TYPES: frozenset[str] = frozenset(
+    {
+        "unresolved_reference", "ambiguous_reference", "broken_link",
+        "near_duplicate", "duplicate",
+        "broken_internal_link", "ambiguous_internal_link",
+    }
+)
+
+
+def _has_hard_review_risk(signals: list[StalenessSignal]) -> bool:
+    """True if any signal represents a hard review risk (always triggers audit)."""
+    return any(
+        s.signal_type in _HARD_RISK_SIGNAL_TYPES
+        or (s.signal_type == "age" and s.severity == Severity.CRITICAL)
+        for s in signals
+    )
+
+
+def _has_cadence_overdue(review_risks: list[str]) -> bool:
+    """True if the document's review cadence is overdue (always triggers audit)."""
+    return any("review cadence" in r.lower() for r in review_risks)
+
+
+def _compute_importance_score(
+    trust_metadata: dict,
+    incoming_ref_count: int,
+    has_version_siblings: bool,
+    is_suggested_replacement: bool,
+    n_stale_siblings: int,
+) -> tuple[int, list[str]]:
+    """Return (score, reasons) representing how important a document is.
+
+    Higher scores mean the document is referenced, maintained, and part of
+    the active knowledge graph — making weak-evidence findings more worthy
+    of human attention.
+    """
+    score = 0
+    reasons: list[str] = []
+
+    # Incoming reference count
+    if incoming_ref_count >= 5:
+        score += 3
+        reasons.append(f"Referenced by {incoming_ref_count} documents (+3)")
+    elif incoming_ref_count >= 2:
+        score += 2
+        reasons.append(f"Referenced by {incoming_ref_count} documents (+2)")
+    elif incoming_ref_count == 1:
+        score += 1
+        reasons.append("Referenced by 1 document (+1)")
+
+    # Document metadata signals
+    if trust_metadata.get("owner"):
+        score += 1
+        reasons.append("Has designated owner (+1)")
+    if trust_metadata.get("declared_status"):
+        score += 1
+        reasons.append("Has declared status field (+1)")
+    lifecycle = trust_metadata.get("lifecycle", "unknown")
+    if lifecycle and lifecycle != "unknown":
+        score += 1
+        reasons.append(f"Lifecycle is '{lifecycle}' (+1)")
+    if trust_metadata.get("canonical"):
+        score += 2
+        reasons.append("Marked as canonical (+2)")
+    if trust_metadata.get("applies_to"):
+        score += 1
+        reasons.append("Has applicability scope (+1)")
+
+    # Graph context
+    if is_suggested_replacement and n_stale_siblings > 0:
+        score += 2
+        label = "documents" if n_stale_siblings != 1 else "document"
+        reasons.append(f"Suggested replacement for {n_stale_siblings} stale {label} (+2)")
+    elif has_version_siblings:
+        score += 1
+        reasons.append("Part of a version family (+1)")
+
+    return score, reasons
+
+
+def compute_audit_actionability(
+    status: str,
+    trust_metadata: dict,
+    trust_evidence: dict,
+    signals: list[StalenessSignal],
+    incoming_ref_count: int,
+    has_version_siblings: bool = False,
+    is_suggested_replacement: bool = False,
+    n_stale_siblings: int = 0,
+) -> dict:
+    """Decide whether this audit result requires a human-audit workflow finding.
+
+    Returns a dict of actionability fields suitable for merging into
+    ``AuditResult.trust_metadata``.
+
+    Key product rule: classification status != human-audit actionability.
+    Low-importance ``unknown`` / soft-evidence ``needs_review`` documents should
+    remain visible in scan results but should not generate actionable findings.
+    """
+    # Current documents never require audit.
+    if status == "current":
+        return {
+            "requires_human_audit": False,
+            "audit_priority": "none",
+            "importance_score": 0,
+            "importance_reasons": [],
+            "actionability_reason": "Document is current — no audit required",
+        }
+
+    # --- Always-actionable conditions ---
+    review_risks: list[str] = trust_evidence.get("review_risks", [])
+
+    if status == "stale":
+        return {
+            "requires_human_audit": True,
+            "audit_priority": "high",
+            "importance_score": 0,
+            "importance_reasons": [],
+            "actionability_reason": "Document is stale",
+        }
+
+    lifecycle = trust_metadata.get("lifecycle", "unknown")
+    if lifecycle in _ALWAYS_ACTIONABLE_LIFECYCLES:
+        return {
+            "requires_human_audit": True,
+            "audit_priority": "high",
+            "importance_score": 0,
+            "importance_reasons": [],
+            "actionability_reason": f"Lifecycle is '{lifecycle}' — always requires review",
+        }
+
+    if _has_hard_review_risk(signals):
+        return {
+            "requires_human_audit": True,
+            "audit_priority": "high",
+            "importance_score": 0,
+            "importance_reasons": [],
+            "actionability_reason": "Has hard review risk (broken links, unresolved references, etc.)",
+        }
+
+    if _has_cadence_overdue(review_risks):
+        return {
+            "requires_human_audit": True,
+            "audit_priority": "high",
+            "importance_score": 0,
+            "importance_reasons": [],
+            "actionability_reason": "Review cadence is overdue",
+        }
+
+    # --- Conditionally actionable: importance-based ---
+    score, reasons = _compute_importance_score(
+        trust_metadata, incoming_ref_count,
+        has_version_siblings, is_suggested_replacement, n_stale_siblings,
+    )
+
+    if score >= IMPORTANCE_THRESHOLD:
+        return {
+            "requires_human_audit": True,
+            "audit_priority": "medium",
+            "importance_score": score,
+            "importance_reasons": reasons,
+            "actionability_reason": f"Important document requiring review (score {score})",
+        }
+
+    priority: AuditPriority = "low" if score > 0 else "none"
+    return {
+        "requires_human_audit": False,
+        "audit_priority": priority,
+        "importance_score": score,
+        "importance_reasons": reasons,
+        "actionability_reason": f"Insufficient importance signals to require audit (score {score})",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -900,8 +1535,8 @@ def compute_incoming_ref_counts(
     incoming: dict[str, set[str]] = {}
     for source_id, signals in all_signals.items():
         for s in signals:
-            if s.signal_type == "resolved_reference":
-                target_id = s.details.get("resolved_doc_id")
+            if s.signal_type in ("resolved_reference", "resolved_internal_link"):
+                target_id = s.details.get("resolved_doc_id") or s.details.get("target_id")
                 if target_id and target_id != source_id:
                     incoming.setdefault(target_id, set()).add(source_id)
     return {doc_id: len(sources) for doc_id, sources in incoming.items()}

@@ -9,6 +9,7 @@ import click
 
 from kb_audit.analyzers.base import Analyzer
 from kb_audit.analyzers.broken_links import BrokenLinkAnalyzer
+from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
 from kb_audit.analyzers.references import ReferenceAnalyzer
 from kb_audit.analyzers.similarity import SimilarityAnalyzer
 from kb_audit.analyzers.timestamp import TimestampAnalyzer
@@ -45,6 +46,7 @@ def _build_analyzers(cfg: Config) -> list[Analyzer]:
             patterns=[p for p in cfg.analyzers.version_refs.patterns],
         ),
         BrokenLinkAnalyzer(),
+        InternalLinkAnalyzer(),
         ReferenceAnalyzer(),
     ]
 

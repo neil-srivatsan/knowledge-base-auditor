@@ -61,4 +61,5 @@ class JsonReporter(Reporter):
                 if result.suggested_replacement
                 else None
             ),
+            "trust_metadata": result.trust_metadata,
         }

@@ -43,6 +43,50 @@ def test_scan_lifecycle(tmp_path):
     db.close()
 
 
+def test_finding_audit_context_includes_trust_metadata(tmp_path):
+    db = Database(tmp_path / "test.db")
+    db.connect()
+
+    scan_id = db.start_scan()
+    doc = Document(
+        id="doc-lifecycle",
+        title="Deprecated Guide",
+        content="Status: Deprecated",
+        source_type="notion",
+        last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+    result = AuditResult(
+        document=doc,
+        signals=[],
+        status="stale",
+        confidence=0.9,
+        confidence_reason="Deprecated status",
+        trust_metadata={
+            "lifecycle": "deprecated",
+            "lifecycle_evidence": ["Status field indicates 'Deprecated'"],
+            "declared_status": "Deprecated",
+        },
+        trust_evidence={
+            "summary": "Marked as deprecated",
+            "positive_evidence": [],
+            "review_risks": ["Deprecated status"],
+            "missing_evidence": [],
+            "recommended_action": "Audit before relying on this document.",
+        },
+    )
+
+    db.store_document(scan_id, doc)
+    db.store_result(scan_id, result)
+    db.sync_findings(scan_id, [result])
+
+    finding = db.get_finding(result.finding_key)
+    assert finding is not None
+    assert finding["audit_context"]["trust_metadata"]["lifecycle"] == "deprecated"
+    assert finding["audit_context"]["trust_metadata"]["declared_status"] == "Deprecated"
+
+    db.close()
+
+
 def test_previous_hashes(tmp_path):
     db = Database(tmp_path / "test.db")
     db.connect()
@@ -1297,3 +1341,346 @@ class TestSanitizeError:
         assert result is not None
         assert "APIKEY12345" not in result
         assert "403" in result
+
+
+# ---------------------------------------------------------------------------
+# Actionability-aware _actionable_results tests
+# ---------------------------------------------------------------------------
+
+
+def _make_result(doc_id: str, status: str, trust_metadata: dict | None = None) -> AuditResult:
+    doc = Document(
+        id=doc_id,
+        title=f"Doc {doc_id}",
+        content="content",
+        source_type="notion",
+        last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+    )
+    return AuditResult(
+        document=doc,
+        signals=[],
+        status=status,
+        confidence=0.5,
+        confidence_reason="test",
+        trust_metadata=trust_metadata or {},
+    )
+
+
+class TestActionableResults:
+    """_actionable_results respects requires_human_audit flag when present."""
+
+    def test_stale_no_flag_included_legacy(self, tmp_path):
+        """Legacy: stale result without flag is included."""
+        from kb_audit.db import Database
+        r = _make_result("doc-1", "stale")
+        assert r in Database._actionable_results([r])
+
+    def test_needs_review_no_flag_included_legacy(self, tmp_path):
+        """Legacy: needs_review without flag is included."""
+        from kb_audit.db import Database
+        r = _make_result("doc-1", "needs_review")
+        assert r in Database._actionable_results([r])
+
+    def test_unknown_no_flag_included_legacy(self, tmp_path):
+        """Legacy: unknown without flag is included."""
+        from kb_audit.db import Database
+        r = _make_result("doc-1", "unknown")
+        assert r in Database._actionable_results([r])
+
+    def test_current_never_included(self, tmp_path):
+        """Current docs are never actionable."""
+        from kb_audit.db import Database
+        r = _make_result("doc-1", "current")
+        assert r not in Database._actionable_results([r])
+
+    def test_explicit_flag_true_included(self, tmp_path):
+        """Explicit requires_human_audit=True → included."""
+        from kb_audit.db import Database
+        r = _make_result("doc-1", "unknown", {"requires_human_audit": True})
+        assert r in Database._actionable_results([r])
+
+    def test_explicit_flag_false_excluded(self, tmp_path):
+        """Explicit requires_human_audit=False → excluded (no workflow finding created).
+
+        Status-flagged (unknown) but not audit-required: classification ≠ actionability.
+        """
+        from kb_audit.db import Database
+        r = _make_result("doc-1", "unknown", {"requires_human_audit": False})
+        assert r not in Database._actionable_results([r])
+
+    def test_low_importance_unknown_no_workflow_finding(self, tmp_path):
+        """Unknown doc with requires_human_audit=False does not create a finding in DB."""
+        db = Database(tmp_path / "test.db")
+        db.connect()
+        scan_id = db.start_scan()
+
+        doc = Document(
+            id="low-importance-unknown",
+            title="Payments Team Notes",
+            content="Some notes.",
+            source_type="demo",
+            last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+        result = AuditResult(
+            document=doc,
+            signals=[],
+            status="unknown",
+            confidence=0.1,
+            confidence_reason="No metadata",
+            trust_metadata={
+                "requires_human_audit": False,
+                "audit_priority": "none",
+                "importance_score": 0,
+                "importance_reasons": [],
+                "actionability_reason": "Insufficient importance signals",
+            },
+        )
+        db.store_document(scan_id, doc)
+        db.store_result(scan_id, result)
+        db.sync_findings(scan_id, [result])
+        db.finish_scan(scan_id, 1)
+
+        findings = db.get_findings(scan_id=scan_id)
+        assert len(findings) == 0, (
+            "Low-importance unknown doc must not create a workflow finding"
+        )
+        db.close()
+
+    def test_important_unknown_creates_workflow_finding(self, tmp_path):
+        """Unknown doc with requires_human_audit=True creates a finding."""
+        db = Database(tmp_path / "test.db")
+        db.connect()
+        scan_id = db.start_scan()
+
+        doc = Document(
+            id="important-unknown",
+            title="Critical Undocumented Guide",
+            content="Referenced extensively.",
+            source_type="notion",
+            last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+        result = AuditResult(
+            document=doc,
+            signals=[],
+            status="unknown",
+            confidence=0.3,
+            confidence_reason="No evidence",
+            trust_metadata={
+                "requires_human_audit": True,
+                "audit_priority": "medium",
+                "importance_score": 3,
+                "importance_reasons": ["Referenced by 2 documents (+2)", "Has designated owner (+1)"],
+                "actionability_reason": "Important document requiring review (score 3)",
+            },
+        )
+        db.store_document(scan_id, doc)
+        db.store_result(scan_id, result)
+        db.sync_findings(scan_id, [result])
+        db.finish_scan(scan_id, 1)
+
+        findings = db.get_findings(scan_id=scan_id)
+        assert len(findings) == 1
+        db.close()
+
+    def test_needs_review_soft_only_low_importance_no_finding(self, tmp_path):
+        """needs_review from soft evidence on unimportant doc → no finding."""
+        db = Database(tmp_path / "test.db")
+        db.connect()
+        scan_id = db.start_scan()
+
+        doc = Document(
+            id="soft-needs-review",
+            title="Obscure Internal Note",
+            content="Some stale content.",
+            source_type="notion",
+            last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+        result = AuditResult(
+            document=doc,
+            signals=[],
+            status="needs_review",
+            confidence=0.35,
+            confidence_reason="Old last-reviewed date",
+            trust_metadata={
+                "requires_human_audit": False,
+                "audit_priority": "none",
+                "importance_score": 0,
+                "importance_reasons": [],
+                "actionability_reason": "Insufficient importance signals",
+            },
+            trust_evidence={
+                "summary": "Needs review because last reviewed is old.",
+                "review_risks": ["Last reviewed 2022-01-01 (1200 days ago)"],
+                "positive_evidence": [],
+                "missing_evidence": [],
+                "recommended_action": "Review before relying on this document",
+            },
+        )
+        db.store_document(scan_id, doc)
+        db.store_result(scan_id, result)
+        db.sync_findings(scan_id, [result])
+        db.finish_scan(scan_id, 1)
+
+        findings = db.get_findings(scan_id=scan_id)
+        assert len(findings) == 0, (
+            "Soft-evidence needs_review on unimportant doc must not create a finding"
+        )
+        db.close()
+
+    def test_needs_review_broken_link_always_creates_finding(self, tmp_path):
+        """needs_review with broken link → always creates a finding."""
+        db = Database(tmp_path / "test.db")
+        db.connect()
+        scan_id = db.start_scan()
+
+        doc = Document(
+            id="broken-link-doc",
+            title="Guide With Broken Link",
+            content="See https://dead.example/link",
+            source_type="notion",
+            last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+        result = AuditResult(
+            document=doc,
+            signals=[StalenessSignal("broken_link", Severity.WARNING, "broken link")],
+            status="needs_review",
+            confidence=0.5,
+            confidence_reason="Broken link",
+            trust_metadata={
+                "requires_human_audit": True,
+                "audit_priority": "high",
+                "importance_score": 0,
+                "importance_reasons": [],
+                "actionability_reason": "Has hard review risk",
+            },
+        )
+        db.store_document(scan_id, doc)
+        db.store_result(scan_id, result)
+        db.sync_findings(scan_id, [result])
+        db.finish_scan(scan_id, 1)
+
+        findings = db.get_findings(scan_id=scan_id)
+        assert len(findings) == 1
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Carry-forward trust_metadata preservation
+# ---------------------------------------------------------------------------
+
+
+class TestCarryForwardMetadataPreservation:
+    """load_audit_results must restore trust_metadata from stored trust_data."""
+
+    def _setup_scan1(self, tmp_path, doc_id: str, result: AuditResult) -> tuple:
+        """Create scan 1, store doc+result, finish it. Returns (db, doc)."""
+        db = Database(str(tmp_path / "audit.db"))
+        db.connect()
+        scan_id = db.start_scan()
+        db.store_document(scan_id, result.document)
+        db.store_result(scan_id, result)
+        db.finish_scan(scan_id, 1)
+        return db, scan_id
+
+    def test_carry_forward_preserves_false_flag(self, tmp_path):
+        """Carried-forward result with requires_human_audit=False keeps that flag."""
+        metadata = {
+            "requires_human_audit": False,
+            "audit_priority": "none",
+            "importance_score": 0,
+            "importance_reasons": [],
+            "actionability_reason": "Insufficient importance signals to require audit (score 0)",
+        }
+        result = _make_result("low-importance-doc", "unknown", metadata)
+        db, _scan1 = self._setup_scan1(tmp_path, "low-importance-doc", result)
+
+        scan2 = db.start_scan()
+        db.store_document(scan2, result.document)
+        db.carry_forward_results(scan2, ["low-importance-doc"])
+
+        loaded = db.load_audit_results(scan2, ["low-importance-doc"])
+        assert len(loaded) == 1
+        assert loaded[0].trust_metadata.get("requires_human_audit") is False
+        assert loaded[0].trust_metadata.get("importance_score") == 0
+        db.close()
+
+    def test_carry_forward_false_flag_not_actionable(self, tmp_path):
+        """Carried-forward low-importance result must not appear in _actionable_results."""
+        metadata = {
+            "requires_human_audit": False,
+            "audit_priority": "none",
+            "importance_score": 0,
+            "importance_reasons": [],
+            "actionability_reason": "Insufficient importance signals to require audit (score 0)",
+        }
+        result = _make_result("low-importance-doc", "unknown", metadata)
+        db, _scan1 = self._setup_scan1(tmp_path, "low-importance-doc", result)
+
+        scan2 = db.start_scan()
+        db.store_document(scan2, result.document)
+        db.carry_forward_results(scan2, ["low-importance-doc"])
+
+        loaded = db.load_audit_results(scan2, ["low-importance-doc"])
+        assert Database._actionable_results(loaded) == []
+        db.close()
+
+    def test_carry_forward_preserves_true_flag(self, tmp_path):
+        """Carried-forward result with requires_human_audit=True is actionable."""
+        metadata = {
+            "requires_human_audit": True,
+            "audit_priority": "medium",
+            "importance_score": 3,
+            "importance_reasons": ["Referenced by 2 documents (+2)", "Has designated owner (+1)"],
+            "actionability_reason": "Important document requiring review (score 3)",
+        }
+        result = _make_result("important-doc", "unknown", metadata)
+        db, _scan1 = self._setup_scan1(tmp_path, "important-doc", result)
+
+        scan2 = db.start_scan()
+        db.store_document(scan2, result.document)
+        db.carry_forward_results(scan2, ["important-doc"])
+
+        loaded = db.load_audit_results(scan2, ["important-doc"])
+        assert len(loaded) == 1
+        assert loaded[0].trust_metadata.get("requires_human_audit") is True
+        assert loaded[0].trust_metadata.get("importance_score") == 3
+        assert loaded[0] in Database._actionable_results(loaded)
+        db.close()
+
+    def test_carry_forward_legacy_no_metadata(self, tmp_path):
+        """Legacy stored result with no metadata key returns {} trust_metadata."""
+        import json
+        db = Database(str(tmp_path / "audit.db"))
+        db.connect()
+        scan_id = db.start_scan()
+
+        doc = Document(
+            id="legacy-doc",
+            title="Legacy Doc",
+            content="x",
+            source_type="notion",
+            last_modified=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        )
+        # Store legacy trust_data with only "evidence" key (no "metadata")
+        legacy_trust_data = json.dumps({"evidence": {"summary": "old format", "review_risks": []}})
+        db.store_document(scan_id, doc)
+        db.conn.execute(
+            """INSERT OR REPLACE INTO audit_results
+               (document_id, scan_id, overall_status, signals,
+                suggested_replacement_id, confidence, confidence_reason, trust_data)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("legacy-doc", scan_id, "unknown", "[]", None, 0.5, "no evidence", legacy_trust_data),
+        )
+        db.conn.commit()
+        db.finish_scan(scan_id, 1)
+
+        scan2 = db.start_scan()
+        db.store_document(scan2, doc)
+        db.carry_forward_results(scan2, ["legacy-doc"])
+
+        loaded = db.load_audit_results(scan2, ["legacy-doc"])
+        assert len(loaded) == 1
+        assert loaded[0].trust_metadata == {}
+        # Legacy fallback: unknown with no flag → included in actionable
+        assert loaded[0] in Database._actionable_results(loaded)
+        db.close()

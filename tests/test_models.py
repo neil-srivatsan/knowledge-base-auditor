@@ -1,7 +1,7 @@
 """Tests for data models."""
 
 
-from kb_audit.models import AuditResult, Document, Severity, StalenessSignal
+from kb_audit.models import AuditResult, Document, DocumentLink, Severity, StalenessSignal
 
 
 def test_document_content_hash():
@@ -59,3 +59,36 @@ def test_audit_result_stale_with_signals():
     )
     assert result.status == "stale"
     assert result.overall_status == "stale"
+
+
+# ---------------------------------------------------------------------------
+# DocumentLink: optional url
+# ---------------------------------------------------------------------------
+
+
+class TestDocumentLinkOptionalUrl:
+    def test_no_args_url_is_none(self):
+        link = DocumentLink()
+        assert link.url is None
+
+    def test_url_only(self):
+        link = DocumentLink(url="https://example.com/doc")
+        assert link.url == "https://example.com/doc"
+
+    def test_target_id_only(self):
+        link = DocumentLink(target_id="doc-2")
+        assert link.url is None
+        assert link.target_id == "doc-2"
+
+    def test_target_title_only(self):
+        link = DocumentLink(target_title="My Doc")
+        assert link.url is None
+        assert link.target_title == "My Doc"
+
+    def test_all_fields_optional(self):
+        link = DocumentLink(
+            target_id="d1", target_title="T", text="link text",
+            context="some ctx", source="demo",
+        )
+        assert link.url is None
+        assert link.target_id == "d1"

@@ -251,6 +251,49 @@ FINDINGS_LIST: list[dict[str, Any]] = [
 FINDINGS_SUMMARY: dict[str, Any] = {"open": 2, "acknowledged": 1}
 FINDINGS_SUMMARY_ALL: dict[str, Any] = {"open": 2, "acknowledged": 1, "snoozed": 1}
 
+# Report mock — all three non-current docs are human-audit-required (default/legacy)
+SCAN_REPORT: dict[str, Any] = {
+    "scan_id": 1,
+    "scan": {"scan_id": 1, "started_at": "2025-01-01T12:00:00"},
+    "total_documents": 5,
+    "stale_count": 2,
+    "needs_review_count": 1,
+    "unknown_count": 1,
+    "stale_documents": [SCAN_RESULTS[0], SCAN_RESULTS[4]],   # doc-stale, doc-snoozed
+    "needs_review_documents": [SCAN_RESULTS[1]],             # doc-needs-review
+    "unknown_documents": [SCAN_RESULTS[2]],                  # doc-unknown
+    "status_flagged_count": 4,
+    "human_audit_required_count": 4,
+    "human_audit_required_documents": [SCAN_RESULTS[0], SCAN_RESULTS[4], SCAN_RESULTS[1], SCAN_RESULTS[2]],
+}
+
+# Status-flagged but NOT audit-required: tests the distinction between
+# classification status (unknown) and human-audit actionability (suppressed
+# because importance score is below threshold).
+_SUPPRESSED_UNKNOWN = {
+    **SCAN_RESULTS[2],
+    "trust_metadata": {
+        "requires_human_audit": False,
+        "audit_priority": "none",
+        "importance_score": 0,
+        "actionability_reason": "Insufficient importance signals to require audit (score 0)",
+    },
+}
+SCAN_REPORT_NO_AUDITS: dict[str, Any] = {
+    "scan_id": 1,
+    "scan": {"scan_id": 1, "started_at": "2025-01-01T12:00:00"},
+    "total_documents": 5,
+    "stale_count": 0,
+    "needs_review_count": 0,
+    "unknown_count": 1,
+    "stale_documents": [],
+    "needs_review_documents": [],
+    "unknown_documents": [_SUPPRESSED_UNKNOWN],
+    "status_flagged_count": 1,
+    "human_audit_required_count": 0,
+    "human_audit_required_documents": [],
+}
+
 
 # ---------------------------------------------------------------------------
 # Server fixture
@@ -309,6 +352,12 @@ def page_with_mocks(page, live_server):
         if "/api/scans/1" in url and "/report" not in url:
             route.fulfill(content_type="application/json",
                           body=json.dumps(SCAN_RESPONSE))
+            return
+
+        # Scan report (JSON)
+        if "/api/scans/1/report" in url and "format=text" not in url:
+            route.fulfill(content_type="application/json",
+                          body=json.dumps(SCAN_REPORT))
             return
 
         # Findings summary
@@ -420,6 +469,24 @@ class TestResultFilters:
         rows = p.locator("#resultsBody tr")
         assert rows.count() == 1
         assert "Current Docs" in rows.first.locator("td").nth(1).inner_text()
+
+    def test_human_audit_indicator_is_explicit(self, page_with_mocks):
+        p = page_with_mocks
+        assert "3 human audits required" in p.locator("#summaryBar").inner_text()
+
+        rows = p.locator("#resultsBody tr")
+        assert rows.count() == 3
+        assert all(
+            "Human audit required" in rows.nth(i).locator("td").first.inner_text()
+            for i in range(rows.count())
+        )
+
+        p.locator(".filter-chip", has_text="All").click()
+        p.wait_for_selector("#resultsBody tr")
+        current_row = p.locator("#resultsBody tr", has_text="Current Docs").first
+        snoozed_row = p.locator("#resultsBody tr", has_text="Snoozed Future Doc").first
+        assert "No human audit" in current_row.locator("td").first.inner_text()
+        assert "Audit deferred" in snoozed_row.locator("td").first.inner_text()
 
 
 # ---------------------------------------------------------------------------
@@ -628,11 +695,133 @@ class TestQuickActions:
         p.wait_for_selector("#resultDrawer.active", timeout=3000)
         p.locator("#resultDrawerBody button", has_text="Dismiss").click()
         p.wait_for_selector("#actionModal", timeout=3000)
-        assert p.locator("#dismissReasonInput").is_visible()
+        assert p.locator("#reasonModalInput").is_visible()
         # Fill in a reason and submit
-        p.locator("#dismissReasonInput").fill("No longer relevant")
+        p.locator("#reasonModalInput").fill("No longer relevant")
         p.locator("#actionModalConfirm").click()
         p.wait_for_selector(".toast-success", timeout=3000)
+
+
+# ---------------------------------------------------------------------------
+# More menu and Accept Risk
+# ---------------------------------------------------------------------------
+
+
+class TestMoreMenu:
+    """Tests for the More menu on result/queue rows and Accept Risk action."""
+
+    def test_results_row_has_more_menu(self, page_with_mocks):
+        """Open-state result rows should have a More menu trigger button."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        more_btn = stale_row.locator(".more-menu-wrap button").first
+        assert more_btn.is_visible()
+
+    def test_more_menu_opens_and_closes(self, page_with_mocks):
+        """Clicking the More button opens the dropdown; clicking outside closes it."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        more_btn = stale_row.locator(".more-menu-wrap button").first
+        more_btn.click()
+        menu = stale_row.locator(".more-menu.open")
+        assert menu.is_visible()
+        # Click outside to close
+        p.locator("header").click()
+        assert not stale_row.locator(".more-menu.open").is_visible()
+
+    def test_more_menu_contains_snooze_for_open(self, page_with_mocks):
+        """Open-state More menu should include Snooze option."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.locator(".more-menu-wrap button").first.click()
+        menu = stale_row.locator(".more-menu.open")
+        assert menu.locator("button", has_text="Snooze").is_visible()
+
+    def test_more_menu_contains_accept_risk_for_open(self, page_with_mocks):
+        """Open-state More menu should include Accept Risk option."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.locator(".more-menu-wrap button").first.click()
+        menu = stale_row.locator(".more-menu.open")
+        assert menu.locator("button", has_text="Accept Risk").is_visible()
+
+    def test_snooze_from_more_opens_modal(self, page_with_mocks):
+        """Clicking Snooze in the More menu should open the snooze modal."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.locator(".more-menu-wrap button").first.click()
+        stale_row.locator(".more-menu.open button", has_text="Snooze").click()
+        p.wait_for_selector("#actionModal", timeout=3000)
+        assert p.locator("#actionModal").is_visible()
+        assert p.locator("#snoozeUntilInput").is_visible()
+
+    def test_accept_risk_from_more_opens_modal(self, page_with_mocks):
+        """Clicking Accept Risk in the More menu should open reason modal."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.locator(".more-menu-wrap button").first.click()
+        stale_row.locator(".more-menu.open button", has_text="Accept Risk").click()
+        p.wait_for_selector("#actionModal", timeout=3000)
+        assert p.locator("#actionModal").is_visible()
+        assert p.locator("#reasonModalInput").is_visible()
+
+    def test_accept_risk_submits_accepted_risk_state(self, page_with_mocks):
+        """Accept Risk modal submit should PATCH with state=accepted_risk."""
+        p = page_with_mocks
+        patch_bodies: list[dict] = []
+
+        def _track(route, request):
+            if "/api/findings/" in request.url and request.method == "PATCH":
+                patch_bodies.append(json.loads(request.post_data))
+            route.fallback()
+
+        p.route("**/api/findings/**", _track)
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.locator(".more-menu-wrap button").first.click()
+        stale_row.locator(".more-menu.open button", has_text="Accept Risk").click()
+        p.wait_for_selector("#actionModal", timeout=3000)
+        p.locator("#reasonModalInput").fill("Known limitation")
+        p.locator("#actionModalConfirm").click()
+        p.wait_for_selector(".toast-success", timeout=3000)
+        assert any(b.get("state") == "accepted_risk" for b in patch_bodies)
+        p.unroute("**/api/findings/**")
+
+    def test_drawer_shows_manage_workflow_button(self, page_with_mocks):
+        """Result drawer should show 'Manage Workflow' not 'Full editor'."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.click()
+        p.wait_for_selector("#resultDrawer.active", timeout=3000)
+        drawer = p.locator("#resultDrawerBody")
+        assert drawer.locator("button", has_text="Manage Workflow").is_visible()
+        # Should NOT have 'Full editor'
+        assert drawer.locator("button", has_text="Full editor").count() == 0
+
+    def test_drawer_shows_accept_risk_for_open(self, page_with_mocks):
+        """Result drawer for an open finding should expose Accept Risk button."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.click()
+        p.wait_for_selector("#resultDrawer.active", timeout=3000)
+        drawer = p.locator("#resultDrawerBody")
+        assert drawer.locator("button", has_text="Accept Risk").is_visible()
+
+    def test_more_menu_contains_manage_workflow(self, page_with_mocks):
+        """More menu should include Manage Workflow link."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.locator(".more-menu-wrap button").first.click()
+        menu = stale_row.locator(".more-menu.open")
+        assert menu.locator("button", has_text="Manage Workflow").is_visible()
+
+    def test_escape_closes_more_menu(self, page_with_mocks):
+        """Pressing Escape should close an open More menu."""
+        p = page_with_mocks
+        stale_row = p.locator("#resultsBody tr", has_text="Stale Guide").first
+        stale_row.locator(".more-menu-wrap button").first.click()
+        assert stale_row.locator(".more-menu.open").is_visible()
+        p.keyboard.press("Escape")
+        assert not stale_row.locator(".more-menu.open").is_visible()
 
 
 # ---------------------------------------------------------------------------
@@ -1345,12 +1534,12 @@ class TestDemoModeBrowser:
     # ------------------------------------------------------------------
 
     def test_seven_findings_in_review_queue(self, demo_page_with_results):
-        """Review Queue must display 7 actionable findings."""
+        """Review Queue must display 6 actionable findings."""
         p = demo_page_with_results
         p.locator("#tab-btn-queue").click()
         p.wait_for_selector("#tabQueue .queue-row", timeout=10000)
         count = p.locator("#tabQueue .queue-row").count()
-        assert count == 7, f"Expected 7 actionable queue rows; got {count}"
+        assert count == 6, f"Expected 6 actionable queue rows; got {count}"
 
     # ------------------------------------------------------------------
     # Req 9: A finding can be acknowledged through the real UI
@@ -1456,3 +1645,111 @@ class TestDemoModeBrowser:
         page.wait_for_load_state("networkidle", timeout=10000)
 
         assert errors == [], f"Browser console errors detected: {errors}"
+
+
+# ---------------------------------------------------------------------------
+# Report actionability browser tests
+# ---------------------------------------------------------------------------
+
+
+class TestReportActionabilityBrowser:
+    """Report button label and overlay correctly reflect actionability metadata."""
+
+    def test_report_button_shows_audit_count(self, page_with_mocks):
+        """Report button label shows N audits when human-audit-required docs exist."""
+        p = page_with_mocks
+        btn = p.locator("#reportBtn")
+        btn.wait_for(state="visible", timeout=5000)
+        label = btn.inner_text()
+        # SCAN_REPORT has human_audit_required_count=4; button should NOT say "no audits"
+        assert "no audits" not in label.lower(), f"Expected audit count in label, got: {label!r}"
+        assert "audits" in label.lower(), f"Expected 'audits' in button label, got: {label!r}"
+
+    def test_report_button_no_audits_label(self, page, live_server):
+        """Report button shows 'no audits' when all flagged docs have requires_human_audit=false."""
+
+        def _route(route, request):
+            url = request.url
+            method = request.method
+            if "/api/status" in url:
+                route.fulfill(content_type="application/json", body=json.dumps(STATUS_IDLE))
+                return
+            if "/api/scans" in url and method == "GET" and "/api/scans/" not in url:
+                route.fulfill(content_type="application/json", body=json.dumps(SCANS_LIST))
+                return
+            # Return a scan where the only flagged doc has requires_human_audit=false
+            no_audit_scan = {
+                **SCAN_RESPONSE,
+                "results": [_SUPPRESSED_UNKNOWN, SCAN_RESULTS[3]],  # unknown(suppressed) + current
+            }
+            if "/api/scans/1" in url and "/report" not in url:
+                route.fulfill(content_type="application/json", body=json.dumps(no_audit_scan))
+                return
+            if "/api/scans/1/report" in url and "format=text" not in url:
+                route.fulfill(content_type="application/json", body=json.dumps(SCAN_REPORT_NO_AUDITS))
+                return
+            if "/api/findings/summary" in url:
+                route.fulfill(content_type="application/json", body=json.dumps({"open": 0}))
+                return
+            if "/api/findings" in url and method == "GET":
+                route.fulfill(content_type="application/json", body=json.dumps([]))
+                return
+            route.continue_()
+
+        page.route("**/*", _route)
+        page.goto(live_server)
+        page.wait_for_selector("#historyTimeline li", timeout=5000)
+        page.locator("#historyTimeline li").first.click()
+        # No actionable rows under default filter — wait for report button instead
+        page.locator("#reportBtn").wait_for(state="visible", timeout=5000)
+
+        label = page.locator("#reportBtn").inner_text()
+        assert "no audits" in label.lower(), f"Expected 'no audits' in label, got: {label!r}"
+
+    def test_report_overlay_false_flag_doc_not_shown_as_human_audit_required(self, page, live_server):
+        """Report overlay for suppressed doc must show 'Not flagged for audit', not 'Human audit required'."""
+
+        def _route(route, request):
+            url = request.url
+            method = request.method
+            if "/api/status" in url:
+                route.fulfill(content_type="application/json", body=json.dumps(STATUS_IDLE))
+                return
+            if "/api/scans" in url and method == "GET" and "/api/scans/" not in url:
+                route.fulfill(content_type="application/json", body=json.dumps(SCANS_LIST))
+                return
+            no_audit_scan = {
+                **SCAN_RESPONSE,
+                "results": [_SUPPRESSED_UNKNOWN, SCAN_RESULTS[3]],
+            }
+            if "/api/scans/1" in url and "/report" not in url:
+                route.fulfill(content_type="application/json", body=json.dumps(no_audit_scan))
+                return
+            if "/api/scans/1/report" in url and "format=text" not in url:
+                route.fulfill(content_type="application/json", body=json.dumps(SCAN_REPORT_NO_AUDITS))
+                return
+            if "/api/findings/summary" in url:
+                route.fulfill(content_type="application/json", body=json.dumps({"open": 0}))
+                return
+            if "/api/findings" in url and method == "GET":
+                route.fulfill(content_type="application/json", body=json.dumps([]))
+                return
+            route.continue_()
+
+        page.route("**/*", _route)
+        page.goto(live_server)
+        page.wait_for_selector("#historyTimeline li", timeout=5000)
+        page.locator("#historyTimeline li").first.click()
+        # No actionable rows under default filter — wait for report button instead
+        page.locator("#reportBtn").wait_for(state="visible", timeout=5000)
+
+        page.locator("#reportBtn").click()
+        page.wait_for_selector("#reportOverlay.active", timeout=5000)
+
+        overlay_text = page.locator("#reportBody").inner_text()
+        assert "Human audit required" not in overlay_text, (
+            f"Suppressed doc should not show 'Human audit required'; got: {overlay_text[:300]!r}"
+        )
+        assert "Not flagged for audit" in overlay_text, (
+            f"Expected 'Not flagged for audit' badge; got: {overlay_text[:300]!r}"
+        )

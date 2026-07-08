@@ -8,10 +8,11 @@ import time
 from collections.abc import Iterator
 from datetime import datetime
 from html.parser import HTMLParser
+from urllib.parse import urljoin
 
 import httpx
 
-from kb_audit.models import Document
+from kb_audit.models import Document, DocumentLink
 from kb_audit.sources.base import DocumentSource
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,120 @@ def html_to_text(html: str) -> str:
 def _extract_links(html: str) -> list[str]:
     """Extract href URLs from HTML content."""
     return re.findall(r'href="([^"]+)"', html)
+
+
+class _AnchorExtractor(HTMLParser):
+    """Extract anchor hrefs with display text and block context from Confluence HTML.
+
+    For each anchor, captures:
+    - url: the href attribute
+    - text: the anchor's visible text
+    - context: the full visible text of the containing block element
+      (p, li, td, th, h1-h6), giving relationship phrases outside the <a>
+      tag (e.g. "This page has been replaced by New Guide") to the analyzer.
+    """
+
+    # Block-level tags that define natural context boundaries in Confluence HTML
+    _BLOCK_TAGS: frozenset[str] = frozenset(
+        {"p", "li", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6"}
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._structured: list[DocumentLink] = []
+        # Stack of (text_parts, [(href, anchor_text)]) for nested blocks
+        self._block_stack: list[tuple[list[str], list[tuple[str, str | None]]]] = []
+        self._current_href: str | None = None
+        self._current_anchor_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._BLOCK_TAGS:
+            self._block_stack.append(([], []))
+        if tag == "a":
+            self._current_href = dict(attrs).get("href")
+            self._current_anchor_text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._current_href:
+            anchor_text = "".join(self._current_anchor_text).strip() or None
+            if self._block_stack:
+                self._block_stack[-1][1].append((self._current_href, anchor_text))
+            else:
+                # No containing block — emit with anchor text as fallback context
+                self._structured.append(
+                    DocumentLink(
+                        url=self._current_href,
+                        text=anchor_text,
+                        context=anchor_text,
+                        source="confluence",
+                    )
+                )
+            self._current_href = None
+            self._current_anchor_text = []
+        elif tag in self._BLOCK_TAGS and self._block_stack:
+            text_parts, anchors = self._block_stack.pop()
+            block_context = "".join(text_parts).strip() or None
+            for href, anchor_text in anchors:
+                self._structured.append(
+                    DocumentLink(
+                        url=href,
+                        text=anchor_text,
+                        context=block_context or anchor_text,
+                        source="confluence",
+                    )
+                )
+            # Propagate text upward so parent blocks see nested content
+            if self._block_stack:
+                self._block_stack[-1][0].extend(text_parts)
+
+    def handle_data(self, data: str) -> None:
+        if self._block_stack:
+            self._block_stack[-1][0].append(data)
+        if self._current_href is not None:
+            self._current_anchor_text.append(data)
+
+    def get_structured(self) -> list[DocumentLink]:
+        return self._structured
+
+
+def _normalize_confluence_href(href: str, base_url: str) -> str:
+    """Return *href* as an absolute URL relative to *base_url*.
+
+    Handles two documented Confluence base URL shapes:
+    - https://example.atlassian.net/wiki   (includes /wiki path)
+    - https://example.atlassian.net        (no extra path)
+
+    Rules:
+    - Absolute hrefs (http/https) are returned unchanged.
+    - Site-root relative paths starting with "/" are joined against the
+      scheme+netloc *origin* only, so /wiki/... paths are never doubled
+      regardless of whether base_url itself ends with /wiki.
+    - Non-slash-prefixed relative paths are joined relative to base_url.
+    """
+    from urllib.parse import urlparse as _urlparse
+
+    if href.startswith(("http://", "https://")):
+        return href
+    parsed = _urlparse(base_url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    if href.startswith("/"):
+        return urljoin(origin, href)
+    # Relative without leading slash — join under base_url directory
+    return urljoin(base_url.rstrip("/") + "/", href)
+
+
+def _extract_structured_links(html: str, base_url: str = "") -> list[DocumentLink]:
+    """Extract anchors with display text and block context from Confluence HTML.
+
+    Relative hrefs are resolved against *base_url* when provided.
+    """
+    extractor = _AnchorExtractor()
+    extractor.feed(html)
+    links = extractor.get_structured()
+    if base_url:
+        for link in links:
+            link.url = _normalize_confluence_href(link.url, base_url)
+    return links
 
 
 class ConfluenceSource(DocumentSource):
@@ -232,7 +347,8 @@ class ConfluenceSource(DocumentSource):
         if not content.strip():
             return None
 
-        links = _extract_links(body_storage)
+        doc_links = _extract_structured_links(body_storage, base_url=self._base_url)
+        links = [dl.url for dl in doc_links if dl.url is not None]
 
         # URL
         web_link = page.get("_links", {}).get("webui", "")
@@ -277,6 +393,7 @@ class ConfluenceSource(DocumentSource):
                 "ancestors": ancestor_titles,
                 "links": links,
             },
+            links=doc_links,
         )
         return doc
 

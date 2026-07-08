@@ -437,3 +437,252 @@ class TestConfluenceTrustIntegration:
         doc = docs[0]
         verdict = classify(doc, [], incoming_ref_count=0)
         assert verdict.status == "stale"
+
+
+# ---------------------------------------------------------------------------
+# Structured link extraction: DocumentLink text/context preservation
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_structured_links_preserve_anchor_text():
+    """Document.links captures display text from HTML anchors."""
+    html = (
+        '<p>See <a href="https://example.com/new-guide">replaced by New Guide</a> '
+        'for the current documentation.</p>'
+    )
+    page = _mock_page("801", "Old Guide", html)
+    respx.get(f"{API_BASE}/content").mock(
+        return_value=httpx.Response(200, json={"results": [page], "size": 1})
+    )
+
+    source = ConfluenceSource(
+        base_url=MOCK_BASE, email="a@b.com", api_token="tok",
+        space_key="ENG",
+    )
+    docs = list(source.fetch_documents())
+    source.close()
+
+    doc = docs[0]
+    assert len(doc.links) == 1
+    link = doc.links[0]
+    assert link.url == "https://example.com/new-guide"
+    assert link.text == "replaced by New Guide"
+    assert link.source == "confluence"
+    # metadata["links"] still contains the URL string for backward compat
+    assert "https://example.com/new-guide" in doc.metadata["links"]
+
+
+@respx.mock
+def test_structured_links_metadata_backward_compat():
+    """metadata['links'] still contains URL strings alongside DocumentLink objects."""
+    html = (
+        '<p><a href="https://example.com/api">API docs</a> and '
+        '<a href="https://example.com/guide">the guide</a>.</p>'
+    )
+    page = _mock_page("802", "Link Page", html)
+    respx.get(f"{API_BASE}/content").mock(
+        return_value=httpx.Response(200, json={"results": [page], "size": 1})
+    )
+
+    source = ConfluenceSource(
+        base_url=MOCK_BASE, email="a@b.com", api_token="tok",
+        space_key="ENG",
+    )
+    docs = list(source.fetch_documents())
+    source.close()
+
+    doc = docs[0]
+    url_strings = doc.metadata.get("links", [])
+    assert "https://example.com/api" in url_strings
+    assert "https://example.com/guide" in url_strings
+    # Each is a plain string
+    assert all(isinstance(u, str) for u in url_strings)
+
+
+# ---------------------------------------------------------------------------
+# Block context: surrounding paragraph text captured as context
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_anchor_context_includes_surrounding_paragraph_text():
+    """Replacement phrase outside <a> tag is preserved in DocumentLink.context."""
+    html = (
+        '<p>This page has been replaced by '
+        '<a href="/wiki/spaces/ENG/pages/123/New+Guide">New Guide</a>.</p>'
+    )
+    page = _mock_page("810", "Old Guide", html)
+    respx.get(f"{API_BASE}/content").mock(
+        return_value=httpx.Response(200, json={"results": [page], "size": 1})
+    )
+
+    source = ConfluenceSource(
+        base_url=MOCK_BASE, email="a@b.com", api_token="tok",
+        space_key="ENG",
+    )
+    docs = list(source.fetch_documents())
+    source.close()
+
+    doc = docs[0]
+    assert len(doc.links) == 1
+    link = doc.links[0]
+    assert link.text == "New Guide"
+    assert link.context is not None
+    assert "replaced by" in link.context
+    assert "New Guide" in link.context
+    # URL should be normalized to absolute: origin + href, no doubled /wiki
+    assert link.url.startswith("https://")
+    assert link.url == "https://example.atlassian.net/wiki/spaces/ENG/pages/123/New+Guide"
+    assert "/wiki/wiki/" not in link.url
+    # metadata["links"] has the same absolute URL string
+    assert link.url in doc.metadata["links"]
+
+
+@respx.mock
+def test_anchor_context_includes_backlink_phrase():
+    """Backlink phrase outside <a> tag is captured in context."""
+    html = (
+        '<p>For migration from '
+        '<a href="https://example.com/legacy-api">Legacy API</a>, '
+        'see the upgrade notes.</p>'
+    )
+    page = _mock_page("811", "New Guide", html)
+    respx.get(f"{API_BASE}/content").mock(
+        return_value=httpx.Response(200, json={"results": [page], "size": 1})
+    )
+
+    source = ConfluenceSource(
+        base_url=MOCK_BASE, email="a@b.com", api_token="tok",
+        space_key="ENG",
+    )
+    docs = list(source.fetch_documents())
+    source.close()
+
+    doc = docs[0]
+    assert len(doc.links) == 1
+    link = doc.links[0]
+    assert link.text == "Legacy API"
+    assert link.context is not None
+    assert "migration from" in link.context
+    assert "Legacy API" in link.context
+
+
+@respx.mock
+def test_relative_href_normalized_to_absolute():
+    """Relative Confluence hrefs are stored as absolute URLs in links and metadata."""
+    html = '<p>See <a href="/wiki/spaces/ENG/pages/42/Guide">Guide</a>.</p>'
+    page = _mock_page("812", "Some Page", html)
+    respx.get(f"{API_BASE}/content").mock(
+        return_value=httpx.Response(200, json={"results": [page], "size": 1})
+    )
+
+    source = ConfluenceSource(
+        base_url=MOCK_BASE, email="a@b.com", api_token="tok",
+        space_key="ENG",
+    )
+    docs = list(source.fetch_documents())
+    source.close()
+
+    doc = docs[0]
+    link = doc.links[0]
+    # origin + href: no doubled /wiki regardless of base_url shape
+    assert link.url == "https://example.atlassian.net/wiki/spaces/ENG/pages/42/Guide"
+    assert "/wiki/wiki/" not in link.url
+    assert link.url in doc.metadata["links"]
+
+
+# ---------------------------------------------------------------------------
+# URL normalization helper unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeConfluenceHref:
+    """Unit tests for _normalize_confluence_href."""
+
+    from kb_audit.sources.confluence import _normalize_confluence_href as _norm
+
+    def test_absolute_href_unchanged(self):
+        from kb_audit.sources.confluence import _normalize_confluence_href
+        assert _normalize_confluence_href(
+            "https://external.example.com/doc",
+            "https://example.atlassian.net/wiki",
+        ) == "https://external.example.com/doc"
+
+    def test_slash_wiki_href_with_wiki_in_base_no_double_wiki(self):
+        """base_url contains /wiki + href /wiki/... → no doubled /wiki."""
+        from kb_audit.sources.confluence import _normalize_confluence_href
+        result = _normalize_confluence_href(
+            "/wiki/spaces/ENG/pages/123/New+Guide",
+            "https://example.atlassian.net/wiki",
+        )
+        assert result == "https://example.atlassian.net/wiki/spaces/ENG/pages/123/New+Guide"
+        assert "/wiki/wiki/" not in result
+
+    def test_slash_wiki_href_with_bare_base(self):
+        """base_url without /wiki + href /wiki/... → single /wiki."""
+        from kb_audit.sources.confluence import _normalize_confluence_href
+        result = _normalize_confluence_href(
+            "/wiki/spaces/ENG/pages/123/New+Guide",
+            "https://example.atlassian.net",
+        )
+        assert result == "https://example.atlassian.net/wiki/spaces/ENG/pages/123/New+Guide"
+
+    def test_relative_href_no_slash_joins_under_base(self):
+        """Non-slash relative href is resolved under base_url."""
+        from kb_audit.sources.confluence import _normalize_confluence_href
+        result = _normalize_confluence_href(
+            "spaces/ENG/pages/123/New+Guide",
+            "https://example.atlassian.net/wiki",
+        )
+        assert result == "https://example.atlassian.net/wiki/spaces/ENG/pages/123/New+Guide"
+
+
+# ---------------------------------------------------------------------------
+# Analyzer integration: relative href resolves to correct target after normalization
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_relative_href_resolves_to_correct_target_in_analyzer():
+    """A relative Confluence href, normalized without /wiki doubling, resolves
+    by URL match in InternalLinkAnalyzer and emits replacement_link."""
+    from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
+    from kb_audit.models import Document
+
+    # The target doc's URL is the correctly normalized absolute URL
+    target_url = "https://example.atlassian.net/wiki/spaces/ENG/pages/123/New+Guide"
+
+    html = (
+        '<p>This page has been replaced by '
+        '<a href="/wiki/spaces/ENG/pages/123/New+Guide">New Guide</a>.</p>'
+    )
+    page = _mock_page("815", "Old Guide", html)
+    respx.get(f"{API_BASE}/content").mock(
+        return_value=httpx.Response(200, json={"results": [page], "size": 1})
+    )
+
+    source = ConfluenceSource(
+        base_url=MOCK_BASE, email="a@b.com", api_token="tok",
+        space_key="ENG",
+    )
+    docs = list(source.fetch_documents())
+    source.close()
+
+    old_guide = docs[0]
+    assert len(old_guide.links) == 1
+    assert old_guide.links[0].url == target_url
+
+    new_guide = Document(
+        id="new-guide",
+        title="New Guide",
+        content="New API Guide content.",
+        source_type="confluence",
+        url=target_url,
+    )
+
+    analyzer = InternalLinkAnalyzer()
+    results = analyzer.analyze([old_guide, new_guide])
+    signals = results.get(old_guide.id, [])
+    signal_types = [s.signal_type for s in signals]
+    assert "replacement_link" in signal_types

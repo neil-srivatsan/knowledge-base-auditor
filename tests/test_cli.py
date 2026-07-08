@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
-from kb_audit.cli import cli, _build_reporters
+from kb_audit.cli import cli, _build_reporters, _build_analyzers
 from kb_audit.db import Database
 from kb_audit.models import AuditResult, Document
 from kb_audit.reporters.console import ConsoleReporter
@@ -309,8 +309,8 @@ class TestDemoCommand:
             catch_exceptions=False,
         )
         assert findings_result.exit_code == 0
-        # 7 findings: 3 stale + 3 needs_review + 1 unknown (current pages are not in queue)
-        assert "Total: 7" in findings_result.output
+        # 6 findings: 3 stale + 3 needs_review (unknown payments-team-notes suppressed as low importance)
+        assert "Total: 6" in findings_result.output
 
     # Test 15: exactly 7 non-current documents appear in findings after demo run
     def test_seven_noncurrent_documents_in_findings(self, runner, tmp_path):
@@ -323,8 +323,8 @@ class TestDemoCommand:
             items = db.get_findings(include_all=True)
         finally:
             db.close()
-        # 3 stale + 3 needs_review + 1 unknown = 7 (current pages not in queue)
-        assert len(items) == 7
+        # 3 stale + 3 needs_review = 6 (unknown payments-team-notes suppressed; current pages excluded)
+        assert len(items) == 6
 
     # Test 16: scan history document_count is 10
     def test_scan_document_count_is_ten(self, runner, tmp_path):
@@ -443,6 +443,29 @@ class TestBuildReporters:
 
 
 # ---------------------------------------------------------------------------
+# Analyzer stack wiring
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAnalyzers:
+    """Verify InternalLinkAnalyzer is wired into the CLI analyzer stack."""
+
+    def test_internal_links_analyzer_present(self):
+        from kb_audit.config import Config
+        from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
+        analyzers = _build_analyzers(Config())
+        names = [a.name() for a in analyzers]
+        assert "internal_links" in names
+
+    def test_internal_links_after_broken_links_before_references(self):
+        from kb_audit.config import Config
+        analyzers = _build_analyzers(Config())
+        names = [a.name() for a in analyzers]
+        assert names.index("internal_links") > names.index("broken_links")
+        assert names.index("internal_links") < names.index("references")
+
+
+# ---------------------------------------------------------------------------
 # Demo command — regression / strengthened assertions
 # ---------------------------------------------------------------------------
 
@@ -536,7 +559,7 @@ class TestDemoCommandStronger:
             counts[r["overall_status"]] = counts.get(r["overall_status"], 0) + 1
         assert counts == {"current": 3, "stale": 3, "needs_review": 3, "unknown": 1}
 
-    def test_actionable_queue_has_seven_findings(self, tmp_path):
+    def test_actionable_queue_has_six_findings(self, tmp_path):
         db_str = self._run_demo(tmp_path)
         db = Database(db_str)
         db.connect()
@@ -544,7 +567,7 @@ class TestDemoCommandStronger:
             findings = db.get_findings(include_all=True)
         finally:
             db.close()
-        assert len(findings) == 7
+        assert len(findings) == 6
 
     def test_no_current_page_in_findings_queue(self, tmp_path):
         """The three current pages must not appear in the findings queue."""

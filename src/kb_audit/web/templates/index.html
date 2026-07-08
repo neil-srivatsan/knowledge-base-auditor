@@ -62,11 +62,11 @@
   }
 
   .container {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: 24px;
     display: grid;
-    grid-template-columns: 1fr 320px;
+    grid-template-columns: 1fr 300px;
     gap: 24px;
   }
 
@@ -307,7 +307,7 @@
 
   .results-table th {
     text-align: left;
-    padding: 10px 16px;
+    padding: 10px 12px;
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
@@ -320,7 +320,7 @@
   }
 
   .results-table td {
-    padding: 12px 16px;
+    padding: 12px 12px;
     border-bottom: 1px solid var(--border);
     vertical-align: top;
   }
@@ -342,6 +342,52 @@
   .pill-stale { background: var(--red-bg); color: var(--red); }
   .pill-needs-review { background: var(--amber-bg); color: var(--amber); }
   .pill-unknown { background: #f1f3f5; color: #6b7280; }
+
+  .status-stack {
+    min-width: 132px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .review-badge {
+    display: inline-flex;
+    align-items: center;
+    max-width: 150px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: normal;
+  }
+
+  .review-required {
+    background: var(--red-bg);
+    color: var(--red);
+    border: 1px solid #fecaca;
+  }
+
+  .review-clear {
+    background: var(--green-bg);
+    color: var(--green);
+    border: 1px solid #bbf7d0;
+  }
+
+  .review-deferred {
+    background: var(--cyan-bg);
+    color: var(--cyan);
+    border: 1px solid #a5f3fc;
+  }
+
+  .review-detail {
+    margin-top: 8px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
 
   /* Workflow state pills */
   .pill-open { background: var(--red-bg); color: var(--red); }
@@ -1033,6 +1079,29 @@
   .act-btn-success { border-color: var(--green); color: var(--green); }
   .act-btn-success:hover { background: var(--green-bg); }
 
+  /* More action menu */
+  .more-menu-wrap { position: relative; display: inline-block; }
+  .more-menu {
+    position: fixed;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-lg);
+    min-width: 160px;
+    z-index: 200;
+    padding: 4px 0;
+    display: none;
+  }
+  .more-menu.open { display: block; }
+  .more-menu button {
+    display: block; width: 100%; text-align: left;
+    padding: 7px 14px; font-size: 13px; font-family: inherit;
+    background: none; border: none; cursor: pointer; color: var(--text);
+    white-space: nowrap;
+  }
+  .more-menu button:hover { background: var(--bg); }
+  .more-menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
+
   /* Result detail drawer */
   .result-drawer-backdrop {
     display: none;
@@ -1252,13 +1321,13 @@
           <table class="results-table">
             <thead>
               <tr>
-                <th style="width:90px">Status</th>
+                <th style="width:120px">Status</th>
                 <th>Document</th>
-                <th style="width:200px">Primary issue</th>
+                <th style="width:180px">Primary issue</th>
                 <th style="width:80px">Owner</th>
-                <th style="width:80px">Due</th>
-                <th style="width:100px">Workflow</th>
-                <th style="width:160px">Actions</th>
+                <th style="width:60px">Due</th>
+                <th style="width:90px">Workflow</th>
+                <th style="min-width:160px">Actions</th>
               </tr>
             </thead>
             <tbody id="resultsBody"></tbody>
@@ -1438,11 +1507,93 @@
   const RISK_ORDER = { stale: 0, needs_review: 1, unknown: 2, current: 3 };
 
   function isResultActionable(r) {
-    // current documents never require review
     if (r.overall_status === 'current') return false;
-    // stale, needs_review, and unknown all require human review
-    if (!r.workflow) return true;  // no finding yet — not yet triaged
+    const tm = r.trust_metadata || {};
+    // Explicit flag from actionability layer takes precedence
+    if (tm.requires_human_audit === false) return false;
+    if (tm.requires_human_audit === true) {
+      if (!r.workflow) return true;  // flagged but no finding yet
+      return r.workflow.is_actionable === true;
+    }
+    // Legacy fallback: no flag → old status-based rule
+    if (!r.workflow) return true;
     return r.workflow.is_actionable === true;
+  }
+
+  function isWorkflowActionableState(state, snoozedUntil) {
+    if (state === 'fixed' || state === 'dismissed' || state === 'accepted_risk') return false;
+    if (state === 'snoozed' && snoozedUntil) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const until = new Date(snoozedUntil);
+      return until <= today;
+    }
+    return true;
+  }
+
+  function getReviewRequirement(r) {
+    if (!r || r.overall_status === 'current') {
+      return {
+        state: 'clear',
+        label: 'No human audit',
+        cls: 'review-clear',
+        reason: 'Current evidence is sufficient.'
+      };
+    }
+
+    // Explicit not-flagged: not important enough for human audit
+    const tm = r.trust_metadata || {};
+    if (tm.requires_human_audit === false) {
+      return {
+        state: 'not_flagged',
+        label: 'Not flagged for audit',
+        cls: 'review-clear',
+        reason: tm.actionability_reason || 'Insufficient importance signals to require human audit.',
+      };
+    }
+
+    const wf = r.workflow || {};
+    if (wf.is_actionable === false) {
+      const labelByState = {
+        snoozed: 'Audit deferred',
+        fixed: 'Audit resolved',
+        dismissed: 'Audit dismissed',
+        accepted_risk: 'Risk accepted',
+      };
+      return {
+        state: 'deferred',
+        label: labelByState[wf.state] || 'Audit not active',
+        cls: 'review-deferred',
+        reason: wf.state ? `Workflow state: ${STATE_LABELS[wf.state] || wf.state}` : 'Workflow is not currently actionable.'
+      };
+    }
+
+    const reasonByStatus = {
+      stale: 'Audit this document before relying on it.',
+      needs_review: 'Classifier found mixed or incomplete evidence.',
+      unknown: 'Classifier lacks enough evidence to determine status.',
+    };
+    return {
+      state: 'required',
+      label: 'Human audit required',
+      cls: 'review-required',
+      reason: reasonByStatus[r.overall_status] || 'Human verification is required.'
+    };
+  }
+
+  function getFindingReviewRequirement(f) {
+    const ctx = f.audit_context || {};
+    return getReviewRequirement({
+      overall_status: ctx.overall_status || 'unknown',
+      workflow: {
+        state: f.workflow_state,
+        is_actionable: isWorkflowActionableState(f.workflow_state, f.snoozed_until),
+      },
+    });
+  }
+
+  function renderReviewBadge(decision, extraStyle = '') {
+    return `<span class="review-badge ${decision.cls}" title="${escapeHtml(decision.reason)}"${extraStyle ? ` style="${extraStyle}"` : ''}>${escapeHtml(decision.label)}</span>`;
   }
 
   function getResultPrimaryIssue(r) {
@@ -1590,23 +1741,25 @@
       const ws = getResultWorkflowState(r);
       const wsPillCls = ws ? (STATE_PILL_CLS[ws] || 'pill-unknown') : '';
       const wsLabel = ws ? (STATE_LABELS[ws] || ws) : '';
+      const review = getReviewRequirement(r);
 
       let actionsHtml = `<button class="act-btn" onclick="event.stopPropagation();openResultDetail('${escapeHtml(r.id)}')">Details</button>`;
       const fk = r.workflow && r.workflow.finding_key;
       if (fk) {
         if (!ws || ws === 'open') {
           actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','acknowledged')">Acknowledge</button>`;
-          actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
         } else if (ws === 'acknowledged') {
-          actionsHtml += ` <button class="act-btn act-btn-success" onclick="event.stopPropagation();quickResultAction(this,'${fk}','fixed')">Fixed</button>`;
-          actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
+          actionsHtml += ` <button class="act-btn act-btn-success" onclick="event.stopPropagation();quickResultAction(this,'${fk}','fixed')">Mark Fixed</button>`;
+        } else if (ws === 'snoozed') {
+          actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','open')">Reopen</button>`;
         } else {
           actionsHtml += ` <button class="act-btn" onclick="event.stopPropagation();quickResultAction(this,'${fk}','open')">Reopen</button>`;
         }
+        actionsHtml += ' ' + buildMoreMenuHtml(fk, ws || 'open', 'quickResultAction');
       }
 
       return `<tr style="cursor:pointer" tabindex="0" data-doc-id="${escapeHtml(r.id)}" onclick="openResultDetail('${escapeHtml(r.id)}')">
-        <td><span class="pill ${st.cls}">${st.label}</span></td>
+        <td><div class="status-stack"><span class="pill ${st.cls}">${st.label}</span>${renderReviewBadge(review)}</div></td>
         <td class="doc-title">${titlePart}${dateMeta}</td>
         <td class="reason-cell">${primaryIssue || '\u2014'}</td>
         <td style="white-space:nowrap;color:var(--text-secondary);font-size:13px">${owner ? escapeHtml(owner) : '\u2014'}</td>
@@ -2044,6 +2197,10 @@
     const needsReview = results.filter(r => r.overall_status === 'needs_review').length;
     const unknown = results.filter(r => r.overall_status === 'unknown').length;
     const current = results.length - stale - needsReview - unknown;
+    const humanAuditRequired = results.filter(r => getReviewRequirement(r).state === 'required').length;
+    const humanAuditSummary = humanAuditRequired > 0
+      ? {cls: 'review-required', label: humanAuditRequired + ' human audits required', reason: 'Documents still requiring manual audit.', state: 'required'}
+      : {cls: 'review-clear', label: 'No human audits required', reason: 'No currently actionable audit work.', state: 'clear'};
 
     document.getElementById('tabCountResults').textContent = results.length;
 
@@ -2073,6 +2230,7 @@
       <span class="stat"><span class="dot dot-red"></span>${stale} stale</span>
       <span class="stat"><span class="dot dot-amber"></span>${needsReview} needs review</span>
       <span class="stat"><span class="dot dot-gray"></span>${unknown} unknown</span>
+      <span class="stat">${renderReviewBadge(humanAuditSummary, 'max-width:none')}</span>
     `;
 
     // Changes since last scan
@@ -2110,9 +2268,10 @@
     }
 
     const reportBtn = document.getElementById('reportBtn');
-    const flaggedCount = stale + needsReview + unknown;
-    if (flaggedCount > 0) {
-      reportBtn.textContent = 'Review Report (' + flaggedCount + ')';
+    const statusFlaggedCount = stale + needsReview + unknown;
+    if (statusFlaggedCount > 0) {
+      const auditLabel = humanAuditRequired > 0 ? `${humanAuditRequired} audits` : 'no audits';
+      reportBtn.textContent = `Review Report (${auditLabel})`;
       reportBtn.style.display = '';
       reportBtn.disabled = false;
     } else {
@@ -2249,6 +2408,7 @@
       const trustBadge = trustSt
         ? `<span class="pill ${trustSt.cls}" style="font-size:11px">${trustSt.label}</span>`
         : '';
+      const review = getFindingReviewRequirement(f);
 
       // Confidence
       const confPct = ctx ? Math.round((ctx.confidence || 0) * 100) : null;
@@ -2273,32 +2433,24 @@
         summaryLine += `<div class="queue-row-meta" style="margin-top:2px;font-style:italic">${escapeHtml(recommendedAction)}</div>`;
       }
 
-      // Quick action buttons based on current state
+      // Quick action buttons based on current state: inline primary + More menu
       let actions = '';
       if (ws === 'open') {
-        actions = `
-          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','acknowledged')">Acknowledge</button>
-          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','dismissed')">Dismiss</button>
-        `;
+        actions = `<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','acknowledged')">Acknowledge</button>`;
       } else if (ws === 'acknowledged') {
-        actions = `
-          <button class="btn btn-sm btn-success" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','fixed')">Fixed</button>
-          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','dismissed')">Dismiss</button>
-        `;
-      } else if (ws === 'dismissed' || ws === 'fixed' || ws === 'accepted_risk') {
-        actions = `
-          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','open')">Reopen</button>
-        `;
+        actions = `<button class="btn btn-sm btn-success" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','fixed')">Mark Fixed</button>`;
       } else if (ws === 'snoozed') {
-        actions = `
-          <button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','open')">Reopen</button>
-        `;
+        actions = `<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','open')">Reopen</button>`;
+      } else if (ws === 'dismissed' || ws === 'fixed' || ws === 'accepted_risk') {
+        actions = `<button class="btn btn-sm btn-outline" onclick="event.stopPropagation();quickAction(this,'${f.finding_key}','open')">Reopen</button>`;
       }
+      actions += ' ' + buildMoreMenuHtml(f.finding_key, ws || 'open', 'quickAction');
 
       return `<div class="queue-row" tabindex="0" onclick="openDetail('${f.finding_key}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetail('${f.finding_key}');}">
         <div class="queue-row-header">
           <span class="pill ${pillCls}">${pillLabel}</span>
           ${trustBadge}
+          ${renderReviewBadge(review)}
           <span class="queue-row-title">${escapeHtml(f.title)}</span>
           <div class="queue-row-actions">${actions}</div>
         </div>
@@ -2312,7 +2464,9 @@
   }
 
   async function quickAction(btn, findingKey, newState) {
+    if (newState === 'snoozed') { openSnoozeModal(findingKey); return; }
     if (newState === 'dismissed') { openDismissModal(findingKey); return; }
+    if (newState === 'accepted_risk') { openAcceptRiskModal(findingKey); return; }
 
     if (_inFlight.has(findingKey)) return;
     _inFlight.add(findingKey);
@@ -2375,6 +2529,9 @@
     const owner = getResultOwner(r);
     const due = getResultDueDate(r);
     const ws = getResultWorkflowState(r);
+    const review = getReviewRequirement(r);
+    const lifecycle = meta.lifecycle;
+    const lifecycleLabel = lifecycle ? lifecycle.replace(/_/g, ' ') : '';
 
     const posList = (ev.positive_evidence || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
     const riskList = (ev.review_risks || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
@@ -2404,16 +2561,19 @@
         wfActionsHtml = `
           <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','acknowledged')">Acknowledge</button>
           <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','snoozed')">Snooze\u2026</button>
-          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','dismissed')">Dismiss</button>
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','accepted_risk')">Accept Risk</button>`;
       } else if (ws === 'acknowledged') {
         wfActionsHtml = `
           <button class="btn btn-sm btn-success" onclick="quickResultAction(this,'${fk}','fixed')">Mark Fixed</button>
-          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','dismissed')">Dismiss</button>`;
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','snoozed')">Snooze\u2026</button>
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','dismissed')">Dismiss</button>
+          <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','accepted_risk')">Accept Risk</button>`;
       } else {
         wfActionsHtml = `
           <button class="btn btn-sm btn-outline" onclick="quickResultAction(this,'${fk}','open')">Reopen</button>`;
       }
-      wfActionsHtml += ` <button class="btn btn-sm btn-outline" onclick="openDetail('${fk}')">Full editor\u2026</button>`;
+      wfActionsHtml += ` <button class="btn btn-sm btn-outline" onclick="openDetail('${fk}')">Manage Workflow\u2026</button>`;
     }
 
     const wfSection = wf.finding_key ? `
@@ -2438,6 +2598,11 @@
           ${lastReviewed ? `<span>Last reviewed: ${escapeHtml(lastReviewed)}</span>` : ''}
           ${modified ? `<span>Last modified: ${modified}</span>` : ''}
         </div>
+        <div class="review-detail">
+          ${renderReviewBadge(review, 'max-width:none')}
+          ${lifecycleLabel ? `<span style="font-size:13px;color:var(--text-secondary)">Lifecycle: ${escapeHtml(capitalize(lifecycleLabel))}</span>` : ''}
+        </div>
+        <div style="font-size:13px;color:var(--text-secondary);margin-top:4px">${escapeHtml(review.reason)}</div>
       </div>
       ${ev.summary ? `<div class="detail-section">
         <div class="detail-section-title">Summary</div>
@@ -2475,6 +2640,7 @@
   async function quickResultAction(btn, findingKey, newState) {
     if (newState === 'snoozed') { openSnoozeModal(findingKey); return; }
     if (newState === 'dismissed') { openDismissModal(findingKey); return; }
+    if (newState === 'accepted_risk') { openAcceptRiskModal(findingKey); return; }
 
     if (_inFlight.has(findingKey)) return;
     _inFlight.add(findingKey);
@@ -2506,6 +2672,67 @@
       if (btn) btn.disabled = false;
     }
   }
+
+  // --- More Menu ---
+
+  let _openMoreMenu = null;
+
+  const MORE_MENU_ITEMS = {
+    open:          [{label:'Snooze\u2026',state:'snoozed'},{label:'Dismiss',state:'dismissed'},{label:'Accept Risk',state:'accepted_risk'},{sep:true},{label:'Manage Workflow\u2026',action:'manage'}],
+    acknowledged:  [{label:'Snooze\u2026',state:'snoozed'},{label:'Dismiss',state:'dismissed'},{label:'Accept Risk',state:'accepted_risk'},{sep:true},{label:'Manage Workflow\u2026',action:'manage'}],
+    snoozed:       [{label:'Dismiss',state:'dismissed'},{label:'Accept Risk',state:'accepted_risk'},{sep:true},{label:'Manage Workflow\u2026',action:'manage'}],
+    dismissed:     [{label:'Manage Workflow\u2026',action:'manage'}],
+    fixed:         [{label:'Manage Workflow\u2026',action:'manage'}],
+    accepted_risk: [{label:'Manage Workflow\u2026',action:'manage'}],
+  };
+
+  function buildMoreMenuHtml(findingKey, currentState, actionFn) {
+    const items = MORE_MENU_ITEMS[currentState] || MORE_MENU_ITEMS['open'];
+    const fn = actionFn || 'quickAction';
+    let html = '<div class="more-menu-wrap"><button class="act-btn" onclick="event.stopPropagation();toggleMoreMenu(this)" aria-label="More actions">\u22EF</button><div class="more-menu">';
+    for (const item of items) {
+      if (item.sep) { html += '<div class="more-menu-sep"></div>'; continue; }
+      if (item.action === 'manage') {
+        html += `<button onclick="event.stopPropagation();closeMoreMenus();openDetail('${findingKey}')">${escapeHtml(item.label)}</button>`;
+      } else {
+        html += `<button onclick="event.stopPropagation();closeMoreMenus();${fn}(this,'${findingKey}','${item.state}')">${escapeHtml(item.label)}</button>`;
+      }
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  function toggleMoreMenu(btn) {
+    const menu = btn.nextElementSibling;
+    const wasOpen = menu.classList.contains('open');
+    closeMoreMenus();
+    if (wasOpen) return;
+    // Position the menu near the button
+    const rect = btn.getBoundingClientRect();
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.left = rect.left + 'px';
+    menu.classList.add('open');
+    _openMoreMenu = menu;
+    // Adjust if off-screen right
+    requestAnimationFrame(() => {
+      const mr = menu.getBoundingClientRect();
+      if (mr.right > window.innerWidth - 8) {
+        menu.style.left = Math.max(8, window.innerWidth - mr.width - 8) + 'px';
+      }
+      // Adjust if off-screen bottom
+      if (mr.bottom > window.innerHeight - 8) {
+        menu.style.top = (rect.top - mr.height - 4) + 'px';
+      }
+    });
+  }
+
+  function closeMoreMenus() {
+    document.querySelectorAll('.more-menu.open').forEach(m => m.classList.remove('open'));
+    _openMoreMenu = null;
+  }
+
+  document.addEventListener('click', () => closeMoreMenus());
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMoreMenus(); });
 
   // --- Action Modal (Snooze / Dismiss) ---
 
@@ -2539,15 +2766,23 @@
     );
   }
 
-  function openDismissModal(findingKey) {
+  function openReasonModal(findingKey, targetState, title, confirmLabel, placeholder) {
     _openActionModal(
-      'Dismiss finding',
+      title,
       `<div class="field">
-        <label for="dismissReasonInput">Reason <span style="color:var(--text-secondary);font-weight:400">(optional)</span></label>
-        <input type="text" id="dismissReasonInput" placeholder="Why is this being dismissed?">
+        <label for="reasonModalInput">Reason <span style="color:var(--text-secondary);font-weight:400">(optional)</span></label>
+        <input type="text" id="reasonModalInput" placeholder="${escapeHtml(placeholder || '')}">
       </div>`,
-      'Dismiss', findingKey, 'dismissed'
+      confirmLabel, findingKey, targetState
     );
+  }
+
+  function openDismissModal(findingKey) {
+    openReasonModal(findingKey, 'dismissed', 'Dismiss finding', 'Dismiss', 'Why is this being dismissed?');
+  }
+
+  function openAcceptRiskModal(findingKey) {
+    openReasonModal(findingKey, 'accepted_risk', 'Accept risk', 'Accept Risk', 'Why is this risk being accepted?');
   }
 
   function closeActionModal() {
@@ -2573,8 +2808,8 @@
         return;
       }
       body.snoozed_until = dateInput.value;
-    } else if (_actionModalPendingState === 'dismissed') {
-      const reasonInput = document.getElementById('dismissReasonInput');
+    } else if (_actionModalPendingState === 'dismissed' || _actionModalPendingState === 'accepted_risk') {
+      const reasonInput = document.getElementById('reasonModalInput');
       if (reasonInput && reasonInput.value.trim()) body.dismissal_reason = reasonInput.value.trim();
     }
 
@@ -2653,6 +2888,10 @@
         ? `<div><a href="${escapeHtml(ctx.url)}" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none">${escapeHtml(ctx.url)}</a></div>`
         : '';
       const ev = ctx.trust_evidence || {};
+      const meta = ctx.trust_metadata || {};
+      const review = getFindingReviewRequirement(finding);
+      const lifecycle = meta.lifecycle;
+      const lifecycleLabel = lifecycle ? lifecycle.replace(/_/g, ' ') : '';
       const summaryText = ev.summary ? `<div style="margin-top:4px">${escapeHtml(ev.summary)}</div>` : '';
       const posList = (ev.positive_evidence || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
       const riskList = (ev.review_risks || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
@@ -2668,6 +2907,11 @@
             <span>Confidence: ${confPct}%</span>
             <span>Source: ${escapeHtml(capitalize(finding.source_type))}</span>
           </div>
+          <div class="review-detail">
+            ${renderReviewBadge(review, 'max-width:none')}
+            ${lifecycleLabel ? `<span>Lifecycle: ${escapeHtml(capitalize(lifecycleLabel))}</span>` : ''}
+          </div>
+          <div style="margin-top:4px">${escapeHtml(review.reason)}</div>
           ${urlLink}
           ${summaryText}
           ${posList ? `<div style="margin-top:6px"><strong style="font-size:12px">Positive evidence:</strong><ul class="reason-list">${posList}</ul></div>` : ''}
@@ -2877,9 +3121,25 @@
         }
       }
 
+      const reportHumanAuditCount = flagged.filter(r => getReviewRequirement({
+        overall_status: r._status,
+        trust_metadata: r.trust_metadata,
+        workflow: wfMap[r.id] ? {
+          state: wfMap[r.id].state,
+          is_actionable: wfMap[r.id].is_actionable,
+        } : undefined,
+      }).state === 'required').length;
+      const reportHumanAuditSummary = reportHumanAuditCount > 0
+        ? {cls: 'review-required', label: reportHumanAuditCount + ' human audits required', reason: 'Documents still requiring manual audit.', state: 'required'}
+        : {cls: 'review-clear', label: 'No human audits required', reason: 'No currently actionable audit work.', state: 'clear'};
+
       let html = `<div class="report-summary-box">
         ${parts.join(', ')} out of <strong>${data.total_documents}</strong> documents scanned
         ${scanDate ? `on ${scanDate}` : ''}.
+        <div style="margin-top:4px;font-size:13px;color:var(--text-2)">Status-flagged: ${flagged.length}&nbsp;&nbsp;·&nbsp;&nbsp;Human audits required: ${reportHumanAuditCount}</div>
+        <div style="margin-top:8px">
+          ${renderReviewBadge(reportHumanAuditSummary, 'max-width:none')}
+        </div>
       </div>`;
 
       html += flagged.map(r => {
@@ -2898,6 +3158,14 @@
 
         // Workflow metadata enrichment
         const wf = wfMap[r.id];
+        const review = getReviewRequirement({
+          overall_status: r._status,
+          trust_metadata: r.trust_metadata,
+          workflow: wf ? {
+            state: wf.state,
+            is_actionable: wf.is_actionable,
+          } : undefined,
+        });
         let wfHtml = '';
         if (wf) {
           const ws = wf.state;
@@ -2922,6 +3190,7 @@
         return `<div class="report-item">
           <div class="report-item-header">
             <span class="pill ${pillCls}">${pillLabel}</span>
+            ${renderReviewBadge(review)}
             <span class="title">${titleLink}</span>
           </div>
           <div class="report-item-meta">

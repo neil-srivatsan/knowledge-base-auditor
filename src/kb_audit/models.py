@@ -17,9 +17,28 @@ class Severity(str, Enum):
 
 Status = Literal["current", "stale", "needs_review", "unknown"]
 
+Lifecycle = Literal[
+    "current", "supported", "deprecated", "superseded",
+    "experimental", "draft", "archived", "unknown",
+]
+
 WorkflowState = Literal[
     "open", "acknowledged", "dismissed", "fixed", "snoozed", "accepted_risk",
 ]
+
+AuditPriority = Literal["high", "medium", "low", "none"]
+
+
+@dataclass
+class DocumentLink:
+    """A structured link extracted from a document's source representation."""
+
+    url: str | None = None
+    target_id: str | None = None
+    target_title: str | None = None
+    text: str | None = None
+    context: str | None = None
+    source: str = ""
 
 
 @dataclass
@@ -33,6 +52,7 @@ class Document:
     url: str | None = None
     last_modified: datetime | None = None
     metadata: dict = field(default_factory=dict)
+    links: list[DocumentLink] = field(default_factory=list)
     content_hash: str = field(default="", init=False)
 
     def __post_init__(self) -> None:
