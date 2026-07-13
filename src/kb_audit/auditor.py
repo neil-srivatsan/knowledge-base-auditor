@@ -6,7 +6,8 @@ import logging
 from collections.abc import Callable
 
 from kb_audit.analyzers.base import Analyzer
-from kb_audit.db import Database, LeaseLostError
+from kb_audit.db import LeaseLostError
+from kb_audit.storage.contracts import AuditStorage
 from kb_audit.models import AuditResult, Document, Severity, StalenessSignal
 from kb_audit.reporters.base import Reporter
 from kb_audit.sources.base import DocumentSource
@@ -22,7 +23,7 @@ class Auditor:
         sources: list[DocumentSource],
         analyzers: list[Analyzer],
         reporters: list[Reporter],
-        db: Database | None = None,
+        db: AuditStorage | None = None,
     ) -> None:
         self._sources = sources
         self._analyzers = analyzers

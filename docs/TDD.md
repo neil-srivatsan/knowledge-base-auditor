@@ -4,7 +4,7 @@
 
 **Document status:** Current implementation  
 **Product stage:** Local-first prototype  
-**Last updated:** 2026-06-25
+**Last updated:** 2026-07-10
 
 ## 1. Purpose
 
@@ -15,7 +15,7 @@ controls, security boundaries, testing strategy, and known technical constraints
 The related product documents are:
 
 - `docs/Product Brief.md`: original problem statement and product intent
-- `docs/Product Requirements Document.md`: product requirements and roadmap
+- `docs/PRD.md`: product requirements and roadmap
 - `README.md`: installation, usage, and contributor-facing overview
 
 This is a description of the current system. Future architecture is identified separately and is
@@ -104,7 +104,7 @@ evaluated without credentials using demo mode.
 | Web API | FastAPI |
 | Web server | Uvicorn |
 | Frontend | Server-delivered HTML, CSS, and vanilla JavaScript |
-| Persistence | SQLite with WAL mode |
+| Persistence | SQLite with WAL mode; factory-wired PostgreSQL backend with opt-in readiness and live conformance harnesses |
 | Configuration | YAML, environment variables, and `.env` |
 | Similarity | RapidFuzz |
 | Console output | Rich |
@@ -119,6 +119,7 @@ src/kb_audit/
   analyzers/          Evidence analyzers
   reporters/          Console and JSON output
   sources/            Notion, Confluence, and demo sources
+  storage/            Persistence factory, contracts, SQLite backend, PostgreSQL backend, readiness checks, schemas, and serialization helpers
   web/
     app.py            FastAPI application and web runtime
     templates/
@@ -126,7 +127,7 @@ src/kb_audit/
   auditor.py          Scan orchestration
   cli.py              CLI entry point
   config.py           Configuration loading
-  db.py               SQLite schema and persistence
+  db.py               Backward-compatible persistence facade exposing Database
   models.py           Shared domain models
   titles.py           Shared title normalization
   trust.py            Trust classification
@@ -139,6 +140,7 @@ tests/
   test_demo_pipeline.py
   golden-scenario tests
   test_trust.py
+  test_storage_serialization.py
   test_web.py
   test_workflow.py
   ...                 Additional unit and integration tests
@@ -159,12 +161,29 @@ tests/
 | `url` | optional string | Source page URL |
 | `last_modified` | optional datetime | Source modification timestamp |
 | `metadata` | dictionary | Source-specific context and extracted links |
+| `links` | list of `DocumentLink` | Structured source links resolved by the internal-link analyzer |
 | `content_hash` | string | SHA-256 hash calculated from content |
 
 The content hash is used for incremental scan behavior. It does not currently include title,
 source metadata, URL, or modification time.
 
-### 6.2 StalenessSignal
+### 6.2 DocumentLink
+
+`DocumentLink` captures source-aware links extracted by adapters before content is flattened.
+
+| Field | Type | Description |
+|---|---|---|
+| `url` | optional string | Link URL when the source provides one |
+| `target_id` | optional string | Source-specific target document ID when available |
+| `target_title` | optional string | Target title or page mention text when available |
+| `text` | optional string | Anchor or rich-text label |
+| `context` | optional string | Nearby source text used to interpret the relationship |
+| `source` | string | Source adapter that produced the link |
+
+`url` is optional because some source links, mentions, or structured references can be resolved by
+ID or title without a URL.
+
+### 6.3 StalenessSignal
 
 An analyzer produces zero or more `StalenessSignal` objects for a page.
 
@@ -186,8 +205,13 @@ Examples include:
 - `resolved_reference`
 - `unresolved_reference`
 - `ambiguous_reference`
+- `resolved_internal_link`
+- `broken_internal_link`
+- `ambiguous_internal_link`
+- `replacement_link`
+- `backlink_from_successor`
 
-### 6.3 AuditResult
+### 6.4 AuditResult
 
 `AuditResult` combines a document, analyzer signals, and the trust verdict.
 
@@ -200,7 +224,11 @@ Important fields include:
 - `trust_evidence`
 - `suggested_replacement`
 
-### 6.4 Finding Identity
+`trust_metadata` stores parsed document metadata and derived heuristic metadata, including lifecycle,
+applicability scope, human-audit actionability, audit priority, importance score, and actionability
+reason.
+
+### 6.5 Finding Identity
 
 Actionable results use a deterministic finding key:
 
@@ -211,7 +239,7 @@ SHA-256(source_type + ":" + document_id + ":" + status)[0:24]
 The key remains stable while source, document identity, and classification remain unchanged.
 A classification change produces a different key.
 
-### 6.5 Evidence Identity
+### 6.6 Evidence Identity
 
 Each result also has an evidence hash derived from:
 
@@ -253,13 +281,16 @@ Supported modes:
 - Notion page URL search
 
 Notion content is retrieved from block children and flattened to text. Nested blocks are traversed
-recursively to a configured internal maximum depth. Extracted page metadata includes:
+recursively to a configured internal maximum depth. Rich-text links, page mentions, bookmarks,
+embeds, and link previews are also converted to `DocumentLink` objects when enough source data is
+available. Extracted page metadata includes:
 
 - created time and creator
 - last editor
 - parent information
 - archived state
-- extracted links
+- extracted URL strings in `metadata["links"]`
+- structured links in `Document.links`
 
 Title and URL search behavior can retrieve related title variants so pages such as v1, v2, and v3
 can be analyzed together. Page-tree and database modes remain bound to their selected targets.
@@ -275,7 +306,8 @@ Supported modes:
 - CQL query
 
 The adapter uses the Confluence Cloud REST API, retrieves storage-format HTML, and converts it to
-plain text with an `HTMLParser`-based extractor. It retains:
+plain text with an `HTMLParser`-based extractor. Anchor tags are also converted to structured
+`DocumentLink` objects with URL, anchor text, and containing-block context. It retains:
 
 - source URL
 - modification time
@@ -285,10 +317,11 @@ plain text with an `HTMLParser`-based extractor. It retains:
 - page status
 - space key
 - ancestor titles
-- extracted links
+- extracted URL strings in `metadata["links"]`
+- structured links in `Document.links`
 
-Modification dates and links feed current analyzers. Most remaining Confluence metadata is stored
-as context but is not currently used by the trust classifier.
+Modification dates, URL links, and structured links feed current analyzers. Most remaining
+Confluence metadata is stored as context but is not currently used by the trust classifier.
 
 Confluence API calls paginate in groups of 25 and retry HTTP 429 responses using `Retry-After`.
 
@@ -410,6 +443,32 @@ Outcomes:
 
 Resolution occurs only against the pages passed to the analyzer.
 
+### 8.6 InternalLinkAnalyzer
+
+`InternalLinkAnalyzer` resolves source-aware `Document.links` against documents included in the
+current scan.
+
+Resolution order:
+
+1. exact `target_id`
+2. exact normalized URL
+3. exact target title
+4. normalized base-title match
+
+The source page itself is excluded as a target.
+
+Outcomes:
+
+- one target with replacement language in link text or context: `replacement_link`
+- one target with successor/backlink language: `backlink_from_successor`
+- one target without relationship language: `resolved_internal_link`
+- multiple targets: `ambiguous_internal_link`
+- internal-looking link with no target: `broken_internal_link`
+
+`replacement_link` is stale/supersession evidence for the source document. Broken and ambiguous
+internal links are hard review risks. Resolved internal links contribute to incoming-reference
+counts.
+
 ## 9. Title Normalization
 
 `titles.py` provides shared normalization used by reference analysis, similarity analysis, and
@@ -432,6 +491,7 @@ The classifier in `trust.py` receives:
 - all signals for that document
 - incoming resolved-reference count
 - titles of pages in the scan
+- structured applicability scopes for pages in the scan
 
 It parses structured body fields:
 
@@ -443,15 +503,20 @@ It parses structured body fields:
 - `Canonical`
 - `Review cadence`
 - `Applies to`
+- structured scope fields: `Product`, `Version`, `Audience`, `Environment`, `Region`, `Plan`,
+  `Feature state`, and `Feature flag`
+- compact `Scope:` metadata when it uses recognized scope dimensions
 
 ### 10.1 Classification Precedence
 
 ```text
-1. Explicit stale or supersession evidence
-2. Hard review risks
-3. Positive trust evidence with no active risks
-4. Soft review risks
-5. Insufficient evidence
+1. Collect trust, stale, lifecycle, and scope evidence
+2. Apply lifecycle policy to stale/review inputs
+3. Explicit stale or supersession evidence
+4. Hard review risks
+5. Positive trust evidence with no active risks
+6. Soft review risks
+7. Insufficient evidence
 ```
 
 Mapped outcomes:
@@ -462,6 +527,29 @@ Mapped outcomes:
 - positive trust evidence without risk -> `current`
 - soft risk -> `needs_review`
 - otherwise -> `unknown`
+
+Lifecycle is stored separately from status. Supported lifecycle values are:
+
+- `current`
+- `supported`
+- `deprecated`
+- `superseded`
+- `experimental`
+- `draft`
+- `archived`
+- `unknown`
+
+Lifecycle policy is centralized in the classifier:
+
+- deprecated, superseded, and archived lifecycle preserve negative stale evidence
+- experimental and draft lifecycle create review risk without making a document stale solely for
+  that reason
+- supported lifecycle suppresses weak scan-local version supersession because supported older
+  versions may coexist
+- current lifecycle suppresses weak version inference, but only by converting the conflict to a
+  review risk when no stronger stale evidence exists
+- hard negative title suffixes and explicit replacement/deprecation evidence are not suppressed by
+  supported/current lifecycle
 
 ### 10.2 Positive Trust Evidence
 
@@ -492,6 +580,7 @@ Stale evidence includes:
 - replacement metadata
 - deprecation metadata
 - archived source metadata
+- structured `replacement_link` signals
 - title-based year, version, or stale-suffix supersession within the scan
 
 ### 10.4 Review Risks
@@ -501,6 +590,8 @@ Hard risks include:
 - unresolved references
 - ambiguous references
 - broken links
+- broken internal links
+- ambiguous internal links
 - near duplicates
 - critical modification age
 
@@ -511,7 +602,18 @@ Soft risks include:
 
 Current classifier behavior promotes any active hard or soft risk to `needs_review`.
 
-### 10.5 Confidence
+### 10.5 Applicability Scope
+
+Applicability scope is parsed into `trust_metadata["applicability_scope"]`. Scope fields are used to
+avoid false stale classifications when related titles differ by year or version but explicitly apply
+to different products, versions, audiences, environments, regions, plans, feature states, or feature
+flags.
+
+Scope is a suppression signal for weak scan-local supersession only. It does not create positive
+trust evidence by itself and does not override explicit stale evidence such as `Replaced by`,
+deprecated status, archived source metadata, or replacement-link signals.
+
+### 10.6 Confidence
 
 Confidence is rule-based and bounded between zero and one. Separate scoring functions handle:
 
@@ -537,9 +639,11 @@ Acquire scan lease
   -> carry unchanged prior results forward
   -> run analyzers on changed documents
   -> compute incoming-reference context
+  -> parse scan-level applicability scopes
   -> classify changed documents
   -> select replacements
   -> apply cross-document post-processing
+  -> compute human-audit actionability
   -> persist changed results
   -> combine changed and carried results
   -> synchronize workflow findings
@@ -574,7 +678,37 @@ After initial classification, the orchestrator:
   risk exists
 - selects the first valid duplicate or similarity target as the suggested replacement
 
-### 11.4 Failure Behavior
+### 11.4 Human-Audit Actionability
+
+After statuses and replacement context are final, the orchestrator calls
+`compute_audit_actionability()` for every changed result and stores the returned fields inside
+`trust_metadata`.
+
+Actionability fields include:
+
+- `requires_human_audit`
+- `audit_priority`
+- `importance_score`
+- `importance_reasons`
+- `actionability_reason`
+
+Actionability rules:
+
+- `current` results never require human audit
+- `stale` results always require human audit with high priority
+- deprecated, superseded, archived, experimental, and draft lifecycle values always require human
+  audit
+- hard risks such as broken links, broken internal links, unresolved references, ambiguous
+  references, near duplicates, duplicates, and critical document age always require human audit
+- overdue recognized review cadence always requires human audit
+- lower-importance `unknown` and soft-risk `needs_review` results are visible in results but do not
+  create workflow findings unless their importance score reaches the configured threshold
+
+Importance uses incoming references, owner/status metadata, lifecycle, canonical/applicability
+metadata, version-family membership, and whether a document is the suggested replacement for stale
+siblings.
+
+### 11.5 Failure Behavior
 
 Any non-lease exception before completion:
 
@@ -587,15 +721,29 @@ A worker that loses its lease aborts without overwriting the replacement worker'
 
 ## 12. Persistence Design
 
-### 12.1 SQLite Configuration
+### 12.1 SQLite Backend
 
-The database connection enables write-ahead logging:
+`storage/sqlite.py` contains the SQLite implementation as `SqliteStorage`. It owns connection
+lifecycle, lease management, scan lifecycle, document/result persistence, workflow synchronization,
+history queries, and maintenance operations.
+
+`storage/factory.py` exposes `create_storage(database_url)`, the application construction boundary
+used by CLI and FastAPI runtime paths. The factory returns an unconnected `AuditStorage` instance
+— `SqliteStorage` for SQLite and bare-path inputs, `PostgresStorage` for `postgres://` and
+`postgresql://` URLs. Unsupported schemes raise `ValueError`. Callers continue to own connection
+lifecycle by calling `connect()` and `close()`.
+
+`db.py` is now a backward-compatible facade. Existing callers can continue importing
+`Database`, `LeaseLostError`, `ScanLeaseContext`, `_UNSET`, and `_sanitize_error` from
+`kb_audit.db`. `Database` subclasses `SqliteStorage` and preserves the historical public API.
+
+The SQLite connection enables write-ahead logging:
 
 ```sql
 PRAGMA journal_mode=WAL;
 ```
 
-Database URLs such as `sqlite:///kbaudit.db` are normalized to filesystem paths.
+Database URLs such as `sqlite:///kbaudit.db` are normalized to filesystem paths by `SqliteStorage`.
 
 ### 12.2 Primary Tables
 
@@ -663,14 +811,153 @@ Stores the singleton scan lease:
 - last completed scan ID
 - last scan error
 
-### 12.3 Schema Evolution
+### 12.3 Schema Initialization And Evolution
 
-The schema is created with `CREATE TABLE IF NOT EXISTS`. A migration list applies additive
-`ALTER TABLE` statements for databases created by earlier project versions.
+`storage/schema.py` owns SQLite schema initialization. It contains the current `CREATE TABLE IF NOT
+EXISTS` statements, additive migration SQL, and the `initialize_schema()` helper used by
+`Database.connect()`.
 
-There is no external migration framework in the current prototype.
+The schema initializer creates the base tables, creates workflow and scan-state tables, inserts the
+singleton scan-state row, and applies additive `ALTER TABLE` statements for databases created by
+earlier project versions.
 
-### 12.4 Retention
+SQLite schema evolution remains internal to `storage/schema.py`. PostgreSQL schema evolution now has
+a manual Alembic migration path under `migrations/`; Alembic is not run automatically during normal
+application startup.
+
+### 12.4 Storage Contracts
+
+`storage/contracts.py` defines runtime-checkable `Protocol` contracts for the current persistence
+surface:
+
+- connection lifecycle
+- scan lease and concurrency state
+- scan lifecycle and history
+- document and audit-result persistence
+- workflow finding synchronization and updates
+- maintenance operations
+
+`AuditStorage` combines these sub-protocols as the intended storage boundary. The current
+`SqliteStorage` implementation and the compatibility `Database` facade remain structurally
+compatible with the protocols. Application orchestration code types against `AuditStorage` where
+practical, while legacy tests and callers may still construct `Database` directly.
+
+`tests/test_storage_conformance.py` exercises the storage boundary through `AuditStorage` and
+`create_storage()` rather than through `Database` or SQLite internals. It documents backend-neutral
+expectations for connection lifecycle, scan lifecycle, document/result persistence, carry-forward,
+workflow synchronization, workflow reopening, and maintenance behavior. Future storage backends
+should satisfy this suite before being wired into runtime construction.
+
+`PostgresStorage` is the implemented relational backend and is factory-wired for explicit
+`postgres://` and `postgresql://` URLs (Step 10). SQLite remains the default backend for
+bare paths and `sqlite://` inputs. Unsupported URL schemes still raise `ValueError`.
+
+Any further relational or document-store backends must satisfy the same `AuditStorage` contract. A
+relational backend can preserve the contract with tables, transactions, row locks or advisory locks,
+and JSON-compatible columns. A document-store backend can preserve it with collections, embedded
+documents, and backend-supported transactions or equivalent atomic update mechanisms at scan and
+workflow boundaries.
+
+`storage/postgres_support.py` provides `psycopg_available()` and `require_psycopg()` as an
+optional driver probe for the PostgreSQL backend. psycopg v3 (`psycopg[binary]>=3.1`) is
+declared as an optional project dependency under `[project.optional-dependencies] postgres`.
+`create_storage()` returns `PostgresStorage` for `postgres://` and `postgresql://` URLs (Step 10).
+The factory uses a lazy local import so that psycopg remains optional for SQLite-only users.
+`PostgresStorage` has an opt-in live conformance harness in `tests/test_storage_postgres_live.py`.
+Live conformance tests are skipped by default unless `KB_AUDIT_POSTGRES_TEST_URL` points to a
+dedicated test database and psycopg is installed.
+
+`storage/schema_postgres.py` contains the PostgreSQL DDL design for all five tables (`scans`,
+`documents`, `audit_results`, `finding_workflow`, `scan_state`) and eight index statements. It
+uses PostgreSQL-appropriate types: `BIGINT GENERATED BY DEFAULT AS IDENTITY` for auto-increment
+primary keys, `TIMESTAMPTZ` for all timestamp columns, `JSONB` for signals/trust data/metadata,
+and `BOOLEAN` for `scan_state.in_progress`. The module does not import psycopg and does not open connections directly.
+`iter_postgres_schema_statements()` returns statements in dependency order for
+`PostgresStorage.connect()` to execute.
+
+Alembic migration management exists for PostgreSQL under `alembic.ini` and `migrations/`.
+`migrations/versions/0001_initial_schema.py` delegates to
+`iter_postgres_schema_statements()` so the initial migration and direct schema initializer share the
+same DDL source. Migrations are applied manually with `KB_AUDIT_POSTGRES_URL=<url> alembic upgrade
+head`; they are not invoked from `PostgresStorage.connect()` or normal application startup. The
+`alembic_live` tests are opt-in and skip unless Alembic, psycopg, and
+`KB_AUDIT_POSTGRES_TEST_URL` are available.
+
+`storage/postgres.py` contains `PostgresStorage` with connection lifecycle, scan
+lease/lifecycle behaviour, document/result persistence, workflow persistence, scan history/diff,
+and maintenance operations. Connection
+lifecycle: `connect()`, `close()`, `conn` (property), `is_connected` (property).  `connect()` calls `require_psycopg()`, imports
+psycopg inside the method (never at module level), opens the connection, applies the full
+schema via `iter_postgres_schema_statements()` in a cursor block, commits, and closes the
+connection on error before re-raising.
+
+Scan lease methods: `try_start_scan()`, `renew_lease()`, `owns_live_lease()`, `end_scan()`,
+`reset_scan_state()`, `get_scan_state()`.  Scan lifecycle methods: `start_scan()`,
+`finish_scan()`, `fail_scan()`.  `try_start_scan()` uses `SELECT … FOR UPDATE` on the
+singleton `scan_state` row (id=1) instead of SQLite's `BEGIN IMMEDIATE`.  `start_scan()`
+uses `INSERT … RETURNING id` to obtain the new scan ID.
+
+Document/result persistence methods: `store_document()`, `store_result()`, `get_previous_hashes()`,
+`carry_forward_results()`, `load_audit_results()`, and `get_scan_results()`. These methods reuse
+`storage/serialization.py`, use PostgreSQL `INSERT … ON CONFLICT` upserts, pass JSON payloads as
+serialized strings with explicit `::jsonb` casts, and cast JSONB values back to text for existing
+deserializers. Mutating methods verify the active lease when an owner token is supplied and verify
+that the target scan is still running before writing.
+
+Workflow persistence methods: `complete_scan_with_findings()`, `sync_findings()`,
+`update_workflow()`, `get_findings()`, `get_finding()`, and `get_workflow_summary()`. These methods
+preserve SQLite finding identity and evidence-hash semantics, create findings only for actionable
+results, reopen terminal findings when evidence changes, auto-fix findings that disappear from a
+scanned document, and use PostgreSQL-compatible parameterization and timestamp handling.
+
+History and maintenance methods: `get_scan_history()`, `get_scan_diff()`, `clear_all()`,
+`clear_all_if_idle()`, and `prune_scans()`. These methods mirror SQLite scan-history shapes,
+normalize Postgres timestamp values to API-compatible ISO strings, use `SELECT … FOR UPDATE` for
+idle-clear lease checks, and avoid pruning running scans.
+
+`PostgresStorage` does not inherit from `AuditStorage` but satisfies the runtime-checkable
+`AuditStorage` protocol in focused tests. It is registered in `create_storage()` as of Step 10.
+The optional `postgres_live` test marker covers live-backend behavior when a dedicated PostgreSQL
+test database is supplied. Live tests and Alembic migration management are manual and opt-in;
+production readiness is not yet claimed.
+
+`storage/pg_readiness.py` provides import-safe PostgreSQL readiness checks. `check_readiness()`
+reports whether a URL was supplied, whether it is a PostgreSQL URL, whether psycopg and Alembic are
+importable, and whether migration files exist on disk. It does not import psycopg, Alembic, or
+SQLAlchemy at module import time and does not open a connection. `connect_check()` is an explicit
+live check that imports psycopg only when called, runs a lightweight `SELECT 1`, closes the
+connection, does not mutate data, and does not run migrations.
+
+The CLI exposes `kb-audit postgres-check` for the optional PostgreSQL path. URL resolution order is
+`--url` > `KB_AUDIT_POSTGRES_TEST_URL` > configured `DATABASE_URL`. Empty or whitespace-only
+resolved URLs are treated as no URL. Offline checks run by default; `--connect` must be supplied for
+a live connection check. The command never runs Alembic and does not change the default SQLite
+runtime path.
+
+`docker-compose.postgres.yml` provides an opt-in local PostgreSQL container for development and
+live-backend testing. It creates an ephemeral `kbaudit_dev` database and a dedicated
+`kbaudit_test` database. It is not part of normal application startup, and production readiness is
+not claimed.
+
+### 12.5 Storage Serialization
+
+`storage/serialization.py` centralizes persistence-format JSON helpers used by `db.py`:
+
+- signal serialization and deserialization
+- raw signal-record deserialization for API/reporting payloads
+- trust metadata/evidence blob packing and unpacking
+- document metadata JSON serialization
+- stored scan-error sanitization
+
+This package owns storage-format encoding only. Domain identity remains in `models.py`:
+
+- `AuditResult.evidence_hash` remains on `AuditResult`
+- `build_finding_key()` remains in the domain model layer
+
+This preserves workflow identity and evidence-change semantics while preparing the persistence layer
+for cleaner future boundaries.
+
+### 12.6 Retention
 
 After a successful scan, old scan data is pruned to retain the most recent 20 scans. Pruning is
 non-fatal: a pruning failure does not change an already completed scan to failed.
@@ -716,12 +1003,16 @@ queue rather than in-process background execution.
 
 Workflow synchronization occurs atomically with successful scan completion.
 
-For actionable results:
+For actionability-eligible results:
 
 - new findings are inserted
 - existing findings are updated
 - changed evidence may reopen prior terminal findings
 - stable evidence preserves existing workflow disposition
+
+Workflow creation is governed by `trust_metadata["requires_human_audit"]` when present. Legacy rows
+without that flag fall back to the earlier status-based rule: `stale`, `needs_review`, and `unknown`
+receive findings.
 
 For findings whose issue disappears:
 
@@ -761,10 +1052,15 @@ Produces a Rich table intended for interactive CLI use.
 Produces structured JSON to standard output or a selected file. JSON-only output avoids unrelated
 standard-output text so it can be consumed programmatically.
 
+Each document entry includes `trust_metadata`, which carries lifecycle, applicability scope, and
+human-audit actionability metadata.
+
 ### 15.3 Web Review Reports
 
 The web API exposes scan reports in JSON and text formats. The browser renders a review report and
 supports downloads.
+
+Reports distinguish status-flagged documents from documents that require human audit.
 
 ## 16. CLI Design
 
@@ -872,6 +1168,7 @@ The results area provides:
 - classification totals
 - filters and sorting
 - status, confidence, title, primary issue, owner, due date, and workflow state
+- lifecycle and actionability indicators when present
 - a detail drawer with evidence and workflow controls
 - explicit suggested-replacement display
 - non-navigable demo titles
@@ -881,7 +1178,8 @@ The results area provides:
 The review queue displays actionable findings and supports:
 
 - acknowledgment
-- full editing
+- row-level More menus for secondary actions
+- detailed workflow management
 - owner assignment
 - due dates
 - snoozing
@@ -921,6 +1219,9 @@ Important settings include:
 - timestamp thresholds
 - similarity threshold
 - current software-version mappings and version patterns
+
+Trust actionability currently uses fixed in-code thresholds and policy sets rather than
+administrator-configurable policy files.
 
 Secrets should be provided through `.env` or environment variables and excluded from source
 control.
@@ -1009,6 +1310,8 @@ Unit tests cover:
 - title normalization
 - each analyzer
 - trust classification
+- storage serialization helpers
+- storage conformance through the `AuditStorage` protocol
 - configuration
 - source conversion helpers
 - reporters
@@ -1112,6 +1415,11 @@ Link checks can differ across networks because of:
 The single-file frontend is simple to deploy but increasingly costly to maintain as UI behavior
 grows. It has no component framework, module bundler, or generated API client.
 
+### 24.8 Fixed Heuristic Policy
+
+Lifecycle mappings, hard-risk signal sets, actionability thresholds, and scope dimensions are
+implemented in code. They are deterministic and tested, but not yet configurable by administrators.
+
 ## 25. Future Technical Direction
 
 ### 25.1 Relationship-Aware Incremental Analysis
@@ -1139,10 +1447,10 @@ Replace in-process background tasks with:
 
 Move hosted deployments to a production relational database with:
 
+- live PostgreSQL conformance/integration tests in CI
 - tenant IDs
 - source connection records
 - encrypted credential references
-- migrations
 - row-level authorization
 - retention controls
 - backups

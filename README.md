@@ -338,7 +338,7 @@ Environment variables override corresponding YAML settings where supported.
 The tool follows a simple pipeline:
 
 ```text
-Source -> Analyzers -> Trust Classifier -> Reporter / SQLite -> CLI / Web UI
+Source -> Analyzers -> Trust Classifier -> Reporters / Storage -> CLI / Web UI
 ```
 
 Core pieces:
@@ -348,7 +348,8 @@ Core pieces:
 - `trust.py`: converts evidence into trust classification, confidence, and structured explanations
 - `auditor.py`: orchestrates scans and analysis across pages in the scan
 - `reporters`: render console and JSON output
-- `db.py`: stores scan history, result metadata, and review workflow state in SQLite
+- `storage`: persists scan history, result metadata, and review workflow state through the storage factory; SQLite is the default backend and PostgreSQL is opt-in for explicit Postgres URLs
+- `db.py`: preserves the legacy `Database` facade for compatibility callers
 - `web`: provides the local FastAPI UI and review workflow interface
 
 ## Analyzer Coverage
@@ -382,6 +383,85 @@ mypy src/ --cache-dir /private/tmp/kbaudit-mypy-cache
 ```
 
 The test suite includes unit, integration, workflow, API, CLI, golden-scenario, demo-pipeline, and Playwright browser coverage. The golden scenarios serve as an executable product specification for trust-classification behavior.
+
+### PostgreSQL Backend (optional)
+
+**SQLite is the default backend.** PostgreSQL is an opt-in backend for explicit `postgres://` or `postgresql://` URLs. It is not used in demo mode, CLI startup, or web startup unless you pass a Postgres URL.
+
+Migrations are **manual**: `create_storage()`, `PostgresStorage.connect()`, and application startup never run Alembic automatically.
+
+Production readiness is not claimed — the backend is implemented and tested with mocked SQL and an opt-in live conformance suite; CI live certification is a future step.
+
+#### 1. Install the postgres extra
+
+```bash
+pip install -e ".[postgres]"
+# Installs psycopg[binary]>=3.1, alembic>=1.13, sqlalchemy>=2.0
+```
+
+#### 2. Start a local PostgreSQL instance (Docker, optional)
+
+A `docker-compose.postgres.yml` is provided for local development and testing. It is entirely opt-in.
+
+```bash
+# Start (binds to localhost:5433 to avoid conflicts with a system Postgres)
+docker compose -f docker-compose.postgres.yml up -d
+
+# Stop
+docker compose -f docker-compose.postgres.yml down
+```
+
+This creates two ephemeral databases on the container:
+- `kbaudit_dev` — development / migration target
+- `kbaudit_test` — live test suite target
+
+Data does not persist across container restarts (intentional for test isolation).
+
+If you have a local Postgres already running, skip the compose file and use your own URLs below.
+
+#### 3. Apply Alembic migrations
+
+Run migrations manually before connecting for the first time:
+
+```bash
+# Development database
+KB_AUDIT_POSTGRES_URL=postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_dev \
+    alembic upgrade head
+
+# Roll back the most recent migration
+KB_AUDIT_POSTGRES_URL=postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_dev \
+    alembic downgrade -1
+```
+
+#### 4. Run the readiness check
+
+```bash
+# Offline checks only (no database required)
+kb-audit postgres-check \
+    --url postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_dev
+
+# Include a live connection check
+kb-audit postgres-check \
+    --url postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_dev --connect
+```
+
+The offline check verifies that psycopg, alembic, and the migration files are present without opening a connection. `--connect` additionally performs a `SELECT 1` and reports success or failure. Neither path mutates data or runs migrations. If `--url` is omitted, `postgres-check` resolves URLs in this order: `KB_AUDIT_POSTGRES_TEST_URL`, then configured `DATABASE_URL`.
+
+#### 5. Live PostgreSQL Tests (opt-in)
+
+```bash
+pip install -e ".[dev,web,postgres]"
+
+KB_AUDIT_POSTGRES_TEST_URL=postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_test \
+    pytest -q -m postgres_live tests/test_storage_postgres_live.py
+
+# Include the live Alembic smoke tests as well
+KB_AUDIT_POSTGRES_TEST_URL=postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_test \
+    pytest -q -m "postgres_live or alembic_live" \
+    tests/test_storage_postgres_live.py tests/test_alembic_migrations.py
+```
+
+Use a dedicated test database — not your development or production database. The fixture calls `clear_all()` before and after each test. Live tests skip automatically when `KB_AUDIT_POSTGRES_TEST_URL` is not set and are not run in CI by default.
 
 ## Limitations
 

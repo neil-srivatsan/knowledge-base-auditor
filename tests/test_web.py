@@ -876,7 +876,7 @@ class TestNotionPageTreeRouting:
             patch("kb_audit.web.app.Config") as MockCfg,
             patch("kb_audit.web.app.NotionSource") as MockNotion,
             patch("kb_audit.web.app.Auditor"),
-            patch("kb_audit.web.app.Database"),
+            patch("kb_audit.web.app.create_storage"),
         ):
             self._patch_cfg(MockCfg)
             from kb_audit.web.app import _run_scan
@@ -1344,8 +1344,8 @@ class TestScanLease:
 
         ctx = ScanLeaseContext(mock_db, "token")
 
-        with patch("kb_audit.db.Database", return_value=mock_rdb), \
-             patch("kb_audit.db.RENEW_INTERVAL_SECONDS", 0):
+        with patch("kb_audit.storage.sqlite.SqliteStorage", return_value=mock_rdb), \
+             patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
             ctx._renewal_loop()
 
         assert ctx._ownership_lost.is_set()
@@ -1368,8 +1368,8 @@ class TestScanLease:
 
         mock_rdb.renew_lease.side_effect = renew_and_stop
 
-        with patch("kb_audit.db.Database", return_value=mock_rdb), \
-             patch("kb_audit.db.RENEW_INTERVAL_SECONDS", 0):
+        with patch("kb_audit.storage.sqlite.SqliteStorage", return_value=mock_rdb), \
+             patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
             ctx._renewal_loop()
 
         assert not ctx._ownership_lost.is_set()
@@ -1391,8 +1391,8 @@ class TestScanLease:
 
         mock_rdb.renew_lease.side_effect = raise_and_stop
 
-        with patch("kb_audit.db.Database", return_value=mock_rdb), \
-             patch("kb_audit.db.RENEW_INTERVAL_SECONDS", 0):
+        with patch("kb_audit.storage.sqlite.SqliteStorage", return_value=mock_rdb), \
+             patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
             ctx._renewal_loop()
 
         assert not ctx._ownership_lost.is_set()   # exception != ownership loss
@@ -1455,7 +1455,7 @@ class TestScanLease:
             patch("kb_audit.db.ScanLeaseContext._renewal_loop"),   # exits immediately
             patch("kb_audit.web.app.Config") as MockCfg,
             patch("kb_audit.web.app.Auditor") as MockAuditor,
-            patch("kb_audit.web.app.Database", return_value=mock_db),
+            patch("kb_audit.web.app.create_storage", return_value=mock_db),
             patch("kb_audit.web.app.NotionSource"),
             patch.object(threading.Thread, "join", spy_join),
         ):
@@ -1497,7 +1497,7 @@ class TestScanLease:
             patch("kb_audit.db.ScanLeaseContext._renewal_loop"),
             patch("kb_audit.web.app.Config") as MockCfg,
             patch("kb_audit.web.app.Auditor") as MockAuditor,
-            patch("kb_audit.web.app.Database", return_value=mock_db),
+            patch("kb_audit.web.app.create_storage", return_value=mock_db),
             patch("kb_audit.web.app.NotionSource"),
             patch.object(threading.Thread, "join", spy_join),
         ):
@@ -1691,7 +1691,7 @@ class TestScanLease:
             patch("kb_audit.db.ScanLeaseContext._renewal_loop"),
             patch("kb_audit.web.app.Config") as MockCfg,
             patch("kb_audit.web.app.Auditor") as MockAuditor,
-            patch("kb_audit.web.app.Database", return_value=mock_db),
+            patch("kb_audit.web.app.create_storage", return_value=mock_db),
             patch("kb_audit.web.app.NotionSource"),
             patch("kb_audit.web.app.logger") as mock_logger,
         ):
@@ -2059,15 +2059,14 @@ class TestDemoMode:
             demo_source_instances.append(self_inner)
             original_init(self_inner)
 
+        mock_db_inst = MagicMock()
+        mock_db_inst._path = db_path
+        mock_db_inst.end_scan.return_value = True
+        mock_db_inst.owns_live_lease.return_value = True
+        mock_db_inst.get_scan_history.return_value = []
         with patch("kb_audit.web.app.DemoSource") as MockDemo, \
              patch("kb_audit.web.app.Auditor"), \
-             patch("kb_audit.web.app.Database") as MockDb:
-            mock_db_inst = MagicMock()
-            mock_db_inst._path = db_path
-            mock_db_inst.end_scan.return_value = True
-            mock_db_inst.owns_live_lease.return_value = True
-            mock_db_inst.get_scan_history.return_value = []
-            MockDb.return_value = mock_db_inst
+             patch("kb_audit.web.app.create_storage", return_value=mock_db_inst):
             with patch("kb_audit.db.ScanLeaseContext._renewal_loop"):
                 _run_scan("token", None, demo_mode=True)
         MockDemo.assert_called_once()
@@ -2078,17 +2077,16 @@ class TestDemoMode:
         db_path = str(tmp_path / "demo.db")
         configure_app(demo_mode=True, database_path=db_path)
 
+        mock_db_inst = MagicMock()
+        mock_db_inst._path = db_path
+        mock_db_inst.end_scan.return_value = True
+        mock_db_inst.owns_live_lease.return_value = True
+        mock_db_inst.get_scan_history.return_value = []
         with patch("kb_audit.web.app.DemoSource"), \
              patch("kb_audit.web.app.Auditor"), \
-             patch("kb_audit.web.app.Database") as MockDb, \
+             patch("kb_audit.web.app.create_storage", return_value=mock_db_inst), \
              patch("kb_audit.web.app.NotionSource") as MockNotion, \
              patch("kb_audit.web.app.ConfluenceSource") as MockConfluence:
-            mock_db_inst = MagicMock()
-            mock_db_inst._path = db_path
-            mock_db_inst.end_scan.return_value = True
-            mock_db_inst.owns_live_lease.return_value = True
-            mock_db_inst.get_scan_history.return_value = []
-            MockDb.return_value = mock_db_inst
             with patch("kb_audit.db.ScanLeaseContext._renewal_loop"):
                 _run_scan("token", None, demo_mode=True)
         MockNotion.assert_not_called()

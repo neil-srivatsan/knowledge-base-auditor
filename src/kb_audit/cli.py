@@ -16,7 +16,8 @@ from kb_audit.analyzers.timestamp import TimestampAnalyzer
 from kb_audit.analyzers.version_refs import VersionRefsAnalyzer
 from kb_audit.auditor import Auditor
 from kb_audit.config import Config
-from kb_audit.db import Database, LeaseLostError, ScanLeaseContext, _sanitize_error, _UNSET
+from kb_audit.db import LeaseLostError, ScanLeaseContext, _sanitize_error, _UNSET
+from kb_audit.storage import create_storage
 from kb_audit.reporters.base import Reporter
 from kb_audit.reporters.console import ConsoleReporter
 from kb_audit.reporters.json_reporter import JsonReporter
@@ -161,7 +162,7 @@ def scan(
             source.close()
         return
 
-    db = Database(cfg.database_url)
+    db = create_storage(cfg.database_url)
     db.connect()
     owner_token = db.try_start_scan()
     if owner_token is None:
@@ -213,7 +214,7 @@ def demo(output_format: str, output_path: str | None, database_path: str) -> Non
     click.echo("Demo workspace", err=json_to_stdout)
 
     cfg = Config.load()
-    db = Database(database_path)
+    db = create_storage(database_path)
     db.connect()
 
     if not db.clear_all_if_idle():
@@ -272,7 +273,7 @@ def demo(output_format: str, output_path: str | None, database_path: str) -> Non
 def history(limit: int, database_path: str | None) -> None:
     """Show scan history from the local database."""
     cfg = Config.load()
-    db = Database(database_path if database_path is not None else cfg.database_url)
+    db = create_storage(database_path if database_path is not None else cfg.database_url)
     db.connect()
 
     try:
@@ -329,7 +330,7 @@ _STATE_STYLES: dict[str, str] = {
 def findings(state: str | None, scan_id: int | None, include_all: bool, database_path: str | None) -> None:
     """List workflow findings from the review queue."""
     cfg = Config.load()
-    db = Database(database_path if database_path is not None else cfg.database_url)
+    db = create_storage(database_path if database_path is not None else cfg.database_url)
     db.connect()
 
     try:
@@ -376,6 +377,98 @@ def findings(state: str | None, scan_id: int | None, include_all: bool, database
         db.close()
 
 
+@cli.command("postgres-check")
+@click.option(
+    "--url", "database_url",
+    envvar="KB_AUDIT_POSTGRES_TEST_URL",
+    default=None,
+    help=(
+        "PostgreSQL URL to check (e.g. postgresql://localhost/kbaudit). "
+        "Falls back to KB_AUDIT_POSTGRES_TEST_URL, then to the configured DATABASE_URL."
+    ),
+)
+@click.option(
+    "--connect",
+    is_flag=True,
+    help="Attempt a live connection check. Does not mutate data or run migrations.",
+)
+def postgres_check(database_url: str | None, connect: bool) -> None:
+    """Check prerequisites for the opt-in PostgreSQL backend.
+
+    Performs offline checks by default (no database connection required).
+    Pass --connect to additionally verify a live connection.
+
+    URL resolution order: --url > KB_AUDIT_POSTGRES_TEST_URL > configured DATABASE_URL.
+
+    SQLite remains the default backend; this command validates the optional
+    PostgreSQL path only.  Alembic migrations are manual and are never run
+    automatically by this command or by create_storage().
+    """
+    from kb_audit.storage.pg_readiness import check_readiness, connect_check  # noqa: PLC0415
+
+    # Resolve URL: --url / KB_AUDIT_POSTGRES_TEST_URL → configured database URL.
+    # Normalize empty/whitespace-only strings to None so they are treated as no URL.
+    cfg = Config.load()
+    _raw = database_url if database_url is not None else cfg.database_url
+    resolved_url: str | None = _raw if (_raw and _raw.strip()) else None
+
+    report = check_readiness(url=resolved_url)
+
+    click.echo("PostgreSQL Readiness Check")
+    click.echo("-" * 30)
+    click.echo(f"  URL supplied         : {'yes' if report.url_supplied else 'no'}")
+    click.echo(f"  PostgreSQL URL       : {'yes' if report.is_postgres_url else 'no'}")
+    click.echo(f"  psycopg available    : {'yes' if report.psycopg_available else 'NO'}")
+    click.echo(f"  alembic available    : {'yes' if report.alembic_available else 'NO'}")
+    mig_label = (
+        f"yes ({report.migration_count} file{'s' if report.migration_count != 1 else ''})"
+        if report.migrations_on_disk
+        else "NO"
+    )
+    click.echo(f"  migrations on disk   : {mig_label}")
+
+    if report.messages:
+        click.echo("")
+        for msg in report.messages:
+            click.echo(f"  ! {msg}")
+
+    if connect:
+        click.echo("")
+        if not resolved_url or not report.is_postgres_url:
+            click.echo(
+                "  ! --connect requires a PostgreSQL URL "
+                "(--url, KB_AUDIT_POSTGRES_TEST_URL, or DATABASE_URL)."
+            )
+            sys.exit(1)
+        if not report.psycopg_available:
+            click.echo("  ! Cannot connect: psycopg is not installed.")
+            sys.exit(1)
+        click.echo("  Connecting ...", nl=False)
+        err = connect_check(resolved_url)
+        if err:
+            click.echo(f" FAILED\n  ! {err}")
+            sys.exit(1)
+        click.echo(" OK")
+
+    click.echo("")
+    if report.ready:
+        click.echo("  Status: offline checks passed")
+        if not connect:
+            click.echo(
+                "  Next: apply migrations and verify with --connect:\n"
+                f"    KB_AUDIT_POSTGRES_URL={resolved_url or '<url>'} alembic upgrade head\n"
+                f"    kb-audit postgres-check --url {resolved_url or '<url>'} --connect"
+            )
+    elif report.is_postgres_url:
+        click.echo("  Status: prerequisites missing (see above)")
+        sys.exit(1)
+    else:
+        click.echo(
+            "  Status: not a PostgreSQL URL — SQLite remains the default backend"
+        )
+        sys.exit(1)
+
+
 @cli.command()
 @click.argument("finding_key")
 @click.argument("new_state", type=click.Choice(_VALID_STATES))
@@ -402,7 +495,7 @@ def triage(
     open, acknowledged, dismissed, fixed, snoozed, accepted_risk.
     """
     cfg = Config.load()
-    db = Database(database_path if database_path is not None else cfg.database_url)
+    db = create_storage(database_path if database_path is not None else cfg.database_url)
     db.connect()
 
     try:

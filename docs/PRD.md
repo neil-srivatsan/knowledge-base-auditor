@@ -4,7 +4,7 @@
 
 **Document status:** Current  
 **Product stage:** Local-first prototype  
-**Last updated:** 2026-06-25
+**Last updated:** 2026-07-10
 
 ## 1. Purpose
 
@@ -54,13 +54,14 @@ scans, managed deployment, or direct integration with external search and AI ret
 
 - Scan selected documentation from supported sources.
 - Classify every analyzed page as `current`, `needs_review`, `stale`, or `unknown`.
-- Explain each classification with positive evidence, review risks, missing evidence, confidence,
-  and a recommended action.
-- Detect version relationships, duplicates, broken links, and unresolved references.
+- Explain each classification with lifecycle, applicability scope, positive evidence, review risks,
+  missing evidence, confidence, and a recommended action.
+- Detect version relationships, duplicates, broken links, structured internal links, and unresolved
+  references.
 - Recommend replacement pages when evidence supports a specific alternative.
 - Keep reference resolution and relationship analysis within the pages included in the scan.
-- Give users a review queue in which findings can be acknowledged, assigned, deferred, dismissed,
-  accepted as risk, or marked fixed.
+- Give users a review queue for results that require human audit, with workflow states for
+  acknowledgment, assignment, deferral, dismissal, accepted risk, fixing, and reopening.
 - Preserve scan history and workflow state locally.
 - Provide a credential-free demonstration of the complete product workflow.
 
@@ -136,7 +137,7 @@ Needs:
 1. The user installs the project locally.
 2. The user starts the CLI or web demo.
 3. The product scans ten built-in demo pages.
-4. The user sees all four trust classifications and seven actionable findings.
+4. The user sees all four trust classifications and six actionable findings.
 5. The user inspects evidence, suggested replacements, and the review queue.
 6. The user performs at least one workflow action.
 
@@ -161,7 +162,8 @@ Needs:
 1. The user opens the review queue.
 2. The user filters or sorts actionable findings.
 3. The user inspects the page, evidence, and suggested replacement.
-4. The user acknowledges, assigns, snoozes, dismisses, accepts the risk, or fixes the finding.
+4. The user acknowledges, assigns, snoozes, dismisses, accepts the risk, fixes, or reopens the
+   finding.
 5. The workflow state persists across scans.
 6. If the underlying evidence disappears on a later scan, the finding can automatically resolve.
 
@@ -213,7 +215,11 @@ Requirement status values:
 | ANL-08 | Detect unresolved and ambiguous page references within the scan. | Implemented |
 | ANL-09 | Extract supported trust metadata from page content. | Implemented |
 | ANL-10 | Detect explicit supersession, legacy, deprecated, retired, archived, and replacement evidence. | Implemented |
-| ANL-11 | Allow trust policies and thresholds to vary by team, source, or page type. | Next |
+| ANL-11 | Extract structured internal links from source adapters and resolve them within the scan. | Implemented |
+| ANL-12 | Detect replacement links, successor backlinks, broken internal links, and ambiguous internal links. | Implemented |
+| ANL-13 | Detect document lifecycle values separately from the four trust classifications. | Implemented |
+| ANL-14 | Detect structured applicability scope for product, version, audience, environment, region, plan, feature state, and feature flag. | Implemented |
+| ANL-15 | Allow trust policies and thresholds to vary by team, source, or page type. | Next |
 
 ### 8.4 Trust Classification
 
@@ -229,7 +235,10 @@ Requirement status values:
 | CLS-08 | Produce a confidence value and human-readable reason. | Implemented |
 | CLS-09 | Produce structured positive evidence, review risks, missing evidence, and a recommended action. | Implemented |
 | CLS-10 | Keep classification deterministic for identical pages, configuration, and dates. | Implemented |
-| CLS-11 | Allow administrators to configure classification policies without changing source code. | Next |
+| CLS-11 | Treat `draft` and `experimental` lifecycle as review-required without classifying them stale solely for that reason. | Implemented |
+| CLS-12 | Allow multiple supported/current scoped versions to coexist when explicit applicability scope differs. | Implemented |
+| CLS-13 | Distinguish classification status from whether a human audit workflow finding is required. | Implemented |
+| CLS-14 | Allow administrators to configure classification policies without changing source code. | Next |
 
 ### 8.5 Replacement Recommendations
 
@@ -245,7 +254,7 @@ Requirement status values:
 
 | ID | Requirement | Status |
 |---|---|---|
-| WRK-01 | Create actionable findings for stale, needs-review, and unknown results. | Implemented |
+| WRK-01 | Create workflow findings only for results whose actionability metadata says human audit is required. | Implemented |
 | WRK-02 | Exclude current pages from the actionable queue. | Implemented |
 | WRK-03 | Support `open`, `acknowledged`, `dismissed`, `fixed`, `snoozed`, and `accepted_risk` states. | Implemented |
 | WRK-04 | Store owner, due date, note, snooze date, and dismissal or acceptance reason. | Implemented |
@@ -279,7 +288,7 @@ Requirement status values:
 | WEB-04 | Display evidence, confidence, metadata, recommended actions, and suggested replacements. | Implemented |
 | WEB-05 | Display scan history and prior results. | Implemented |
 | WEB-06 | Provide an actionable review queue. | Implemented |
-| WEB-07 | Support workflow actions and detailed editing. | Implemented |
+| WEB-07 | Support workflow actions, list-row action menus, and detailed workflow management. | Implemented |
 | WEB-08 | Generate downloadable JSON and text review reports. | Implemented |
 | WEB-09 | Provide a credential-free demo workspace. | Implemented |
 | WEB-10 | Remain usable at desktop and mobile viewport widths without horizontal overflow. | Implemented |
@@ -293,8 +302,16 @@ Requirement status values:
 | DAT-02 | Prevent concurrent scans from corrupting shared scan state. | Implemented |
 | DAT-03 | Store classification changes across scans. | Implemented |
 | DAT-04 | Keep demo data separate from the default connected-source database. | Implemented |
-| DAT-05 | Support a production database suitable for hosted multi-user operation. | Future |
-| DAT-06 | Provide configurable retention, backup, and recovery policies. | Future |
+| DAT-05 | Maintain a backend-neutral persistence conformance suite for future storage backends. | Implemented |
+| DAT-06 | Keep PostgreSQL support optional until it satisfies the storage contract. | Implemented |
+| DAT-07 | Provide PostgreSQL storage support for the full storage-method surface. | Implemented |
+| DAT-08 | Provide an opt-in live PostgreSQL conformance harness. | Implemented |
+| DAT-09 | Provide manual Alembic migration management for the PostgreSQL backend. | Implemented |
+| DAT-10 | Wire PostgreSQL into `create_storage()` for explicit Postgres URLs. | Implemented |
+| DAT-11 | Provide PostgreSQL readiness checks and an opt-in local Postgres demo/test path. | Implemented |
+| DAT-12 | Certify live PostgreSQL conformance in CI and harden for production use. | Next |
+| DAT-13 | Support a production database suitable for hosted multi-user operation. | Future |
+| DAT-14 | Provide configurable retention, backup, and recovery policies. | Future |
 
 ### 8.10 Demo Mode
 
@@ -332,6 +349,7 @@ Examples include:
 - explicit legacy, deprecated, retired, obsolete, archived, superseded, or end-of-life status
 - `Replaced by` or `Superseded by` metadata
 - explicit body text stating that the page should no longer be used
+- structured internal links whose text or context says the page is replaced by another page
 - an older version when a newer related page exists
 - an exact duplicate that is older than another copy
 - archived source metadata
@@ -342,13 +360,25 @@ Examples include:
 
 - broken external links
 - unresolved or ambiguous page references
+- broken or ambiguous structured internal links
 - overdue review cadence
 - old last-reviewed date
 - critical document age
 - near-duplicate content
 - conflicting authoritative and stale evidence
 
-### 9.4 Missing Evidence
+### 9.4 Lifecycle And Scope
+
+Lifecycle is stored separately from classification status. Supported lifecycle values are `current`,
+`supported`, `deprecated`, `superseded`, `experimental`, `draft`, `archived`, and `unknown`.
+Negative lifecycle evidence can drive stale or review outcomes; draft and experimental lifecycle
+states require review but are not stale solely because they are draft or experimental.
+
+Structured applicability scope may include product, version, audience, environment, region, plan,
+feature state, and feature flag. Scope is used to avoid false supersession when multiple versions or
+variants are intentionally supported for different contexts.
+
+### 9.5 Missing Evidence
 
 Examples include:
 
@@ -359,6 +389,13 @@ Examples include:
 - no incoming references
 
 Missing evidence should explain uncertainty. It should not, by itself, prove that a page is stale.
+
+### 9.6 Human-Audit Actionability
+
+Classification status and workflow actionability are separate. Current pages do not require human
+audit. Stale pages, high-risk lifecycle states, hard review risks, and overdue review cadence require
+human audit. Lower-importance `unknown` or soft-risk `needs_review` results remain visible in scan
+results but may be suppressed from the actionable queue when importance signals are below threshold.
 
 ## 10. User Experience Requirements
 
@@ -438,15 +475,21 @@ Document Source
 Primary components:
 
 - `sources`: retrieve and normalize pages from Notion, Confluence Cloud, or demo data
-- `analyzers`: produce timestamp, similarity, version, link, and reference signals
+- `analyzers`: produce timestamp, similarity, version, external-link, structured-internal-link, and
+  reference signals
 - `trust.py`: convert signals and document metadata into trust verdicts
 - `auditor.py`: coordinate fetching, analysis, classification, replacement selection, and storage
-- `db.py`: persist scans, results, history, leases, and workflow state
+- `db.py`: preserve the existing `Database` persistence facade for compatibility callers
+- `storage`: provide the `create_storage()` construction boundary, persistence contracts, the SQLite
+  backend, schema, serialization helpers, and factory-wired opt-in PostgreSQL backend plus optional
+  live conformance tests, manual Alembic migrations, and PostgreSQL readiness checks
+- `docker-compose.postgres.yml`: provide an opt-in local PostgreSQL instance for development and
+  live-backend testing
 - `reporters`: produce console and JSON output
 - `web`: expose the local API and browser interface
 
 SQLite is appropriate for the current single-user local product. A hosted commercial version will
-require a production database and tenant-aware service architecture.
+require a completed production database backend and tenant-aware service architecture.
 
 ## 13. Reporting Requirements
 
@@ -462,13 +505,15 @@ Each scan result should include:
 - missing evidence
 - recommended action
 - suggested replacement when available
+- lifecycle and applicability metadata when available
+- human-audit requirement, priority, and actionability reason
 - workflow state when actionable
 
 Scan-level reporting should include:
 
 - total pages analyzed
 - counts by classification
-- actionable finding count
+- human-audit/actionable finding count
 - comparison with a prior scan when available
 - downloadable machine-readable and human-readable output
 
@@ -500,7 +545,7 @@ The current prototype is acceptable when:
 1. A user can install and run the credential-free demo.
 2. The demo produces exactly ten results: three current, three stale, three needs review, and one
    unknown.
-3. The demo produces seven actionable review findings.
+3. The demo produces six actionable review findings.
 4. The three expected replacement relationships are correctly generated and displayed.
 5. A user can scan a supported Notion or Confluence Cloud target.
 6. Every result includes a classification, confidence, and structured explanation.
@@ -519,7 +564,8 @@ The current prototype is acceptable when:
 - External link results can vary because of authentication, rate limiting, network policy, or
   remote server behavior.
 - Deterministic heuristics identify trust evidence and risk; they do not verify factual truth.
-- Most Confluence context metadata is stored but not yet used as classification evidence.
+- Some source context metadata is stored only for explainability and is not yet used as
+  classification evidence.
 - The product does not yet write corrections back to source systems.
 - The product does not yet influence external search or AI retrieval ranking.
 - There is no hosted identity, tenant, policy, notification, or audit-log layer.
@@ -581,6 +627,12 @@ The current prototype is acceptable when:
 - **Finding:** An actionable result requiring review or disposition.
 - **Trust evidence:** Information supporting the use of a page as authoritative.
 - **Review risk:** Evidence that a page may be unreliable or require maintenance.
+- **Lifecycle:** A document lifecycle label such as supported, deprecated, experimental, draft, or
+  archived, stored separately from trust classification.
+- **Applicability scope:** Structured metadata describing where a document applies, such as product,
+  version, environment, audience, or plan.
+- **Human-audit actionability:** The explicit decision that a result should or should not appear in
+  the review workflow queue.
 - **Suggested replacement:** A page identified as a stronger alternative to a stale or duplicate
   page.
 - **Current:** Recommended as authoritative based on available evidence.

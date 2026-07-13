@@ -1,0 +1,19 @@
+PostgreSQL migration scripts managed by Alembic.
+
+These migrations apply to the PostgreSQL backend only.
+SQLite remains the default runtime backend and is not managed by Alembic.
+
+PostgreSQL is not yet wired into create_storage() and is for development/
+evaluation use only at this stage.
+
+Apply migrations against a dedicated non-production database:
+
+    KB_AUDIT_POSTGRES_URL=postgresql://localhost/kbaudit \
+        alembic upgrade head
+
+Roll back the most recent migration:
+
+    KB_AUDIT_POSTGRES_URL=postgresql://localhost/kbaudit \
+        alembic downgrade -1
+
+See alembic.ini at the project root for configuration options.

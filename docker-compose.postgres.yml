@@ -1,0 +1,43 @@
+# Local PostgreSQL instance for development and live testing.
+#
+# This file is OPT-IN and does not affect default application startup.
+# SQLite remains the default backend. PostgreSQL requires an explicit
+# postgres:// or postgresql:// URL.
+#
+# Start:   docker compose -f docker-compose.postgres.yml up -d
+# Stop:    docker compose -f docker-compose.postgres.yml down
+# Logs:    docker compose -f docker-compose.postgres.yml logs postgres
+#
+# After starting, apply Alembic migrations before first use:
+#   KB_AUDIT_POSTGRES_URL=postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_dev \
+#     alembic upgrade head
+#
+# Run the readiness check:
+#   kb-audit postgres-check \
+#     --url postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_dev --connect
+#
+# Run live conformance tests:
+#   KB_AUDIT_POSTGRES_TEST_URL=postgresql://kbaudit:kbaudit@localhost:5433/kbaudit_test \
+#     pytest -q -m postgres_live tests/test_storage_postgres_live.py
+#
+# Note: data is ephemeral (tmpfs). Container restarts clear all data.
+# This is intentional for local test isolation.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: kbaudit
+      POSTGRES_PASSWORD: kbaudit
+      POSTGRES_DB: kbaudit_dev
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kbaudit -d kbaudit_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - ./docker/pg-init:/docker-entrypoint-initdb.d:ro
+    tmpfs:
+      - /var/lib/postgresql/data

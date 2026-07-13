@@ -23,7 +23,8 @@ from kb_audit.analyzers.timestamp import TimestampAnalyzer
 from kb_audit.analyzers.version_refs import VersionRefsAnalyzer
 from kb_audit.auditor import Auditor
 from kb_audit.config import Config
-from kb_audit.db import Database, LeaseLostError, ScanLeaseContext, _UNSET
+from kb_audit.db import LeaseLostError, ScanLeaseContext, _UNSET
+from kb_audit.storage import AuditStorage, create_storage
 from kb_audit.models import build_finding_key
 from kb_audit.sources.confluence import ConfluenceSource
 from kb_audit.sources.demo import DemoSource
@@ -217,12 +218,12 @@ def _get_source_info(cfg: Config) -> dict:
     }
 
 
-def _get_db() -> Database:
+def _get_db() -> AuditStorage:
     if _app_config.database_path is not None:
-        db = Database(_app_config.database_path)
+        db = create_storage(_app_config.database_path)
     else:
         cfg = Config.load()
-        db = Database(cfg.database_url)
+        db = create_storage(cfg.database_url)
     db.connect()
     return db
 
@@ -237,7 +238,7 @@ def _run_scan(
     confluence_page_id: str | None = None,
     demo_mode: bool = False,
 ) -> None:
-    db: Database | None = None
+    db: AuditStorage | None = None
     source: NotionSource | ConfluenceSource | DemoSource | None = None
     try:
         cfg = Config.load()
@@ -300,9 +301,9 @@ def _run_scan(
         analyzers = _build_analyzers(cfg)
 
         if _app_config.database_path is not None:
-            db = Database(_app_config.database_path)
+            db = create_storage(_app_config.database_path)
         else:
-            db = Database(cfg.database_url)
+            db = create_storage(cfg.database_url)
         db.connect()
 
         with ScanLeaseContext(db, owner_token) as ctx:
@@ -331,10 +332,10 @@ def _run_scan(
         if db is None:
             try:
                 if _app_config.database_path is not None:
-                    db_end = Database(_app_config.database_path)
+                    db_end = create_storage(_app_config.database_path)
                 else:
                     cfg_end = Config.load()
-                    db_end = Database(cfg_end.database_url)
+                    db_end = create_storage(cfg_end.database_url)
                 db_end.connect()
                 db_end.end_scan(owner_token, None, "Scan setup failed")
             except Exception:
@@ -781,7 +782,7 @@ def main() -> None:
         configure_app(demo_mode=demo, database_path=actual_db_path, host=host, port=port)
 
         if demo:
-            db = Database(actual_db_path)  # type: ignore[arg-type]
+            db = create_storage(actual_db_path)  # type: ignore[arg-type]
             db.connect()
             try:
                 if not db.clear_all_if_idle():
