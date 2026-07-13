@@ -2608,3 +2608,143 @@ class TestRequiresHumanAudit:
             "overall_status": "stale",
             "trust_metadata": None,
         }) is True
+
+
+# ---------------------------------------------------------------------------
+# Network bind safety helpers
+# ---------------------------------------------------------------------------
+
+
+class TestIsLocalBindHost:
+    def test_localhost_accepted(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("localhost") is True
+
+    def test_127_0_0_1_accepted(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("127.0.0.1") is True
+
+    def test_ipv6_loopback_accepted(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("::1") is True
+
+    def test_case_insensitive(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("LOCALHOST") is True
+        assert _is_local_bind_host("LocalHost") is True
+
+    def test_leading_trailing_whitespace_stripped(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("  localhost  ") is True
+
+    def test_0_0_0_0_not_local(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("0.0.0.0") is False
+
+    def test_double_colon_not_local(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("::") is False
+
+    def test_arbitrary_host_not_local(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("192.168.1.10") is False
+
+    def test_empty_string_not_local(self):
+        from kb_audit.web.app import _is_local_bind_host
+        assert _is_local_bind_host("") is False
+
+
+class TestValidateBindHost:
+    def test_localhost_accepted_without_override(self):
+        from kb_audit.web.app import _validate_bind_host
+        _validate_bind_host("localhost", allow_unsafe=False)  # must not raise
+
+    def test_127_0_0_1_accepted_without_override(self):
+        from kb_audit.web.app import _validate_bind_host
+        _validate_bind_host("127.0.0.1", allow_unsafe=False)  # must not raise
+
+    def test_ipv6_loopback_accepted_without_override(self):
+        from kb_audit.web.app import _validate_bind_host
+        _validate_bind_host("::1", allow_unsafe=False)  # must not raise
+
+    def test_0_0_0_0_rejected_without_override(self):
+        import click
+        from kb_audit.web.app import _validate_bind_host
+        with pytest.raises(click.ClickException):
+            _validate_bind_host("0.0.0.0", allow_unsafe=False)
+
+    def test_non_localhost_host_rejected_without_override(self):
+        import click
+        from kb_audit.web.app import _validate_bind_host
+        with pytest.raises(click.ClickException):
+            _validate_bind_host("192.168.1.10", allow_unsafe=False)
+
+    def test_rejection_message_mentions_authentication(self):
+        import click
+        from kb_audit.web.app import _validate_bind_host
+        with pytest.raises(click.ClickException) as exc_info:
+            _validate_bind_host("0.0.0.0", allow_unsafe=False)
+        msg = exc_info.value.format_message()
+        assert "authentication" in msg.lower() or "unauthenticated" in msg.lower()
+
+    def test_0_0_0_0_allowed_with_override(self):
+        from kb_audit.web.app import _validate_bind_host
+        # must not raise
+        _validate_bind_host("0.0.0.0", allow_unsafe=True)
+
+    def test_non_localhost_allowed_with_override(self):
+        from kb_audit.web.app import _validate_bind_host
+        _validate_bind_host("192.168.1.10", allow_unsafe=True)  # must not raise
+
+
+class TestWebMainHostDefaults:
+    """Verify the CLI default host and flag wiring without launching uvicorn."""
+
+    def _invoke(self, args: list[str], **patches):
+        from click.testing import CliRunner
+        from kb_audit.web.app import _web_command
+
+        runner = CliRunner()
+        with patch("uvicorn.run"), patch("kb_audit.web.app.create_storage") as mock_cs:
+            mock_db = MagicMock()
+            mock_db.clear_all_if_idle.return_value = True
+            mock_cs.return_value = mock_db
+            result = runner.invoke(_web_command, args, catch_exceptions=False)
+        return result
+
+    def test_default_host_is_127_0_0_1(self):
+        from click.testing import CliRunner
+        from kb_audit.web.app import _web_command
+
+        runner = CliRunner()
+        with patch("uvicorn.run") as mock_run:
+            runner.invoke(_web_command, [], catch_exceptions=False)
+        host = mock_run.call_args[1].get("host") or mock_run.call_args[0][1]
+        assert host == "127.0.0.1"
+
+    def test_localhost_accepted_without_flag(self):
+        from kb_audit.web.app import _validate_bind_host
+        _validate_bind_host("localhost", allow_unsafe=False)  # must not raise
+
+    def test_0_0_0_0_rejected_without_flag_in_cli(self):
+        from click.testing import CliRunner
+        from kb_audit.web.app import _web_command
+
+        runner = CliRunner()
+        result = runner.invoke(_web_command, ["--host", "0.0.0.0"], catch_exceptions=True)
+        assert result.exit_code != 0
+        assert "authentication" in result.output.lower()
+
+    def test_0_0_0_0_allowed_with_flag_in_cli(self):
+        from click.testing import CliRunner
+        from kb_audit.web.app import _web_command
+
+        runner = CliRunner()
+        with patch("uvicorn.run") as mock_run:
+            result = runner.invoke(
+                _web_command, ["--host", "0.0.0.0", "--allow-unsafe-network-bind"],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0
+        host = mock_run.call_args[1].get("host") or mock_run.call_args[0][1]
+        assert host == "0.0.0.0"

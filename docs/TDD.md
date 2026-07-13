@@ -1263,7 +1263,13 @@ Demo URLs use the reserved `demo.example` hostname and are suppressed as navigat
 
 ### 21.2 Network Boundaries
 
-- the web server binds to localhost by default
+- the web server binds to `127.0.0.1` by default and refuses to start on any
+  other host unless `--allow-unsafe-network-bind` is supplied
+- `_validate_bind_host(host, allow_unsafe)` is called before uvicorn starts;
+  it raises `click.ClickException` for any non-localhost host when the flag is absent
+- accepted localhost addresses: `localhost`, `127.0.0.1`, `::1` (case-insensitive)
+- `--allow-unsafe-network-bind` enables non-localhost binding and logs a prominent
+  warning that the API has no authentication
 - source APIs and external links are the only intended outbound network calls
 - demo mode performs no source API calls
 
@@ -1276,6 +1282,10 @@ Demo URLs are rendered as plain text.
 
 The local web API has no authentication or authorization layer. It must not be exposed to an
 untrusted network in its current form.
+
+The startup guard (`_validate_bind_host`) prevents accidental non-localhost binding but is not a
+substitute for authentication. A developer who supplies `--allow-unsafe-network-bind` accepts full
+responsibility for network exposure.
 
 There is no tenant isolation, centralized secret management, permission replication, or hosted
 audit log.

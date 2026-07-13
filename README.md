@@ -272,6 +272,17 @@ kb-audit-web --demo
 kb-audit-web --database local-audit.db --host 127.0.0.1 --port 8081
 ```
 
+**Network security:** The web API has no authentication. By default, `kb-audit-web` binds to `127.0.0.1` (localhost only) and refuses to bind to any other host. If you pass `--host 0.0.0.0` or any non-localhost address without an explicit override, startup is aborted with a clear error.
+
+To bind to a non-localhost address despite the lack of authentication — for example, in a controlled local network where you accept the risk — add `--allow-unsafe-network-bind`:
+
+```bash
+# Accepted risk: expose web UI on all interfaces (no authentication)
+kb-audit-web --host 0.0.0.0 --allow-unsafe-network-bind
+```
+
+Do not expose the web API to an untrusted network. There is no user authentication, authorization, or tenant isolation.
+
 In connected mode, the UI supports:
 
 - Notion configured targets, page trees, databases, and title/URL searches

@@ -292,7 +292,8 @@ Requirement status values:
 | WEB-08 | Generate downloadable JSON and text review reports. | Implemented |
 | WEB-09 | Provide a credential-free demo workspace. | Implemented |
 | WEB-10 | Remain usable at desktop and mobile viewport widths without horizontal overflow. | Implemented |
-| WEB-11 | Provide hosted authentication and organization administration. | Future |
+| WEB-11 | Refuse non-localhost web-server binding by default because the local web API has no authentication. | Implemented |
+| WEB-12 | Provide hosted authentication and organization administration. | Future |
 
 ### 8.9 Persistence And History
 
@@ -560,6 +561,7 @@ The current prototype is acceptable when:
 
 - Scans are manually initiated.
 - The application is local-first and single-organization.
+- The local web API has no authentication; it binds to localhost by default and requires an explicit unsafe override for non-localhost binding.
 - Source permissions are limited to what the configured integration can access.
 - External link results can vary because of authentication, rate limiting, network policy, or
   remote server behavior.

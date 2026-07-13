@@ -80,6 +80,47 @@ def configure_app(
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
+# ---------------------------------------------------------------------------
+# Network bind safety
+# ---------------------------------------------------------------------------
+
+_LOCAL_BIND_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+
+_UNSAFE_BIND_ERROR = (
+    "The web API has no authentication and must not be exposed to an untrusted "
+    "network. Refusing to bind to {host!r}.\n"
+    "To override this safeguard and accept the risk, add --allow-unsafe-network-bind."
+)
+
+_UNSAFE_BIND_WARNING = (
+    "WARNING: --allow-unsafe-network-bind is set. The web API has no authentication "
+    "and is now exposed on host %r. Do not use this in a production or shared environment."
+)
+
+
+def _is_local_bind_host(host: str) -> bool:
+    """Return True if *host* is a known localhost-only bind address."""
+    return host.strip().lower() in _LOCAL_BIND_HOSTS
+
+
+def _validate_bind_host(host: str, *, allow_unsafe: bool) -> None:
+    """Raise ``click.ClickException`` when binding to a non-local host without override.
+
+    Parameters
+    ----------
+    host:
+        The requested bind host (passed via ``--host``).
+    allow_unsafe:
+        When ``True``, a non-local host is allowed but a warning is logged.
+    """
+    import click  # noqa: PLC0415 — click only needed at startup, not in API handlers
+
+    if _is_local_bind_host(host):
+        return
+    if not allow_unsafe:
+        raise click.ClickException(_UNSAFE_BIND_ERROR.format(host=host))
+    logger.warning(_UNSAFE_BIND_WARNING, host)
+
 # UUID format: 8-4-4-4-12 hex chars
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -760,44 +801,65 @@ async def get_finding(finding_key: str):
         db.close()
 
 
+import click as _click  # noqa: E402 — click is a declared dependency
+
+
+@_click.command()
+@_click.option("--demo", is_flag=True, help="Enable the credential-free demo workspace.")
+@_click.option(
+    "--database", "database_path", type=_click.Path(), default=None,
+    help="Override the database path.",
+)
+@_click.option("--host", default="127.0.0.1", show_default=True, help="Bind host.")
+@_click.option("--port", default=8080, show_default=True, type=int, help="Bind port.")
+@_click.option(
+    "--allow-unsafe-network-bind",
+    is_flag=True,
+    default=False,
+    help=(
+        "Allow binding to a non-localhost host. "
+        "The web API has no authentication — do not expose it to an untrusted network."
+    ),
+)
+def _web_command(
+    demo: bool,
+    database_path: str | None,
+    host: str,
+    port: int,
+    allow_unsafe_network_bind: bool,
+) -> None:
+    """Start the Knowledge Base Auditor web server."""
+    import uvicorn  # noqa: PLC0415 — deferred to avoid startup cost when unused
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    _validate_bind_host(host, allow_unsafe=allow_unsafe_network_bind)
+
+    actual_db_path = database_path
+    if demo and actual_db_path is None:
+        actual_db_path = "kbaudit-demo.db"
+
+    configure_app(demo_mode=demo, database_path=actual_db_path, host=host, port=port)
+
+    if demo:
+        db = create_storage(actual_db_path)  # type: ignore[arg-type]
+        db.connect()
+        try:
+            if not db.clear_all_if_idle():
+                logger.error(
+                    "Demo startup failed: a live scan is in progress. "
+                    "Stop the other scan first."
+                )
+                sys.exit(1)
+        finally:
+            db.close()
+        logger.info("Demo workspace started — database: %s", actual_db_path)
+
+    uvicorn.run(app, host=host, port=port)
+
+
 def main() -> None:
-    import click
-    import uvicorn
-
-    @click.command()
-    @click.option("--demo", is_flag=True, help="Enable the credential-free demo workspace.")
-    @click.option(
-        "--database", "database_path", type=click.Path(), default=None,
-        help="Override the database path.",
-    )
-    @click.option("--host", default="127.0.0.1", show_default=True, help="Bind host.")
-    @click.option("--port", default=8080, show_default=True, type=int, help="Bind port.")
-    def _main(demo: bool, database_path: str | None, host: str, port: int) -> None:
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-        actual_db_path = database_path
-        if demo and actual_db_path is None:
-            actual_db_path = "kbaudit-demo.db"
-
-        configure_app(demo_mode=demo, database_path=actual_db_path, host=host, port=port)
-
-        if demo:
-            db = create_storage(actual_db_path)  # type: ignore[arg-type]
-            db.connect()
-            try:
-                if not db.clear_all_if_idle():
-                    logger.error(
-                        "Demo startup failed: a live scan is in progress. "
-                        "Stop the other scan first."
-                    )
-                    sys.exit(1)
-            finally:
-                db.close()
-            logger.info("Demo workspace started — database: %s", actual_db_path)
-
-        uvicorn.run(app, host=host, port=port)
-
-    _main()
+    _web_command()
 
 
 if __name__ == "__main__":
