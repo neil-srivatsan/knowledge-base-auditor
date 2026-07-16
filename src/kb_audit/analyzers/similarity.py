@@ -105,7 +105,6 @@ class SimilarityAnalyzer(Analyzer):
                 base = _normalize_base_title(doc.title)
                 title_groups[base].append((doc, ver))
 
-        version_flagged: set[str] = set()
         for ver_group in title_groups.values():
             if len(ver_group) < 2:
                 continue
@@ -134,7 +133,6 @@ class SimilarityAnalyzer(Analyzer):
                             },
                         )
                     )
-                    version_flagged.add(doc.id)
 
         # Phase 3: fuzzy near-duplicates (skip pairs already flagged as exact)
         exact_pairs: set[tuple[str, str]] = set()

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
 from kb_audit.models import Document, DocumentLink, Severity, StalenessSignal
 from kb_audit.trust import classify, compute_incoming_ref_counts
@@ -220,7 +218,6 @@ def test_ambiguous_internal_link() -> None:
 # ---------------------------------------------------------------------------
 
 def test_trust_replacement_link_stale() -> None:
-    new_doc = _doc("new-guide", "New Guide")
     old_doc = _doc("old-guide", "Old Guide")
 
     replacement_signal = StalenessSignal(

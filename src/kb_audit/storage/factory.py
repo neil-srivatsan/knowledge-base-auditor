@@ -51,14 +51,14 @@ def create_storage(database_url: str | os.PathLike[str]) -> AuditStorage:
         if url.startswith(scheme):
             raise ValueError(
                 f"Unsupported storage backend {url!r}. "
-                "Only SQLite storage is currently supported."
+                "Supported backends are SQLite and PostgreSQL."
             )
 
     # Catch any other unknown <scheme>:// that is not an SQLite prefix.
     if "://" in url and not any(url.startswith(p) for p in _SQLITE_PREFIXES):
         raise ValueError(
             f"Unsupported storage backend {url!r}. "
-            "Only SQLite storage is currently supported."
+            "Supported backends are SQLite and PostgreSQL."
         )
 
     return SqliteStorage(url)

@@ -452,7 +452,6 @@ class TestBuildAnalyzers:
 
     def test_internal_links_analyzer_present(self):
         from kb_audit.config import Config
-        from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
         analyzers = _build_analyzers(Config())
         names = [a.name() for a in analyzers]
         assert "internal_links" in names

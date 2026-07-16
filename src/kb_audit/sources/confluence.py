@@ -172,7 +172,8 @@ def _extract_structured_links(html: str, base_url: str = "") -> list[DocumentLin
     links = extractor.get_structured()
     if base_url:
         for link in links:
-            link.url = _normalize_confluence_href(link.url, base_url)
+            if link.url is not None:
+                link.url = _normalize_confluence_href(link.url, base_url)
     return links
 
 

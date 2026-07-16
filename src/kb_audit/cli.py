@@ -174,7 +174,10 @@ def scan(
         sys.exit(1)
 
     try:
-        with ScanLeaseContext(db, owner_token) as ctx:
+        with ScanLeaseContext(
+            db, owner_token,
+            renewal_factory=lambda: create_storage(cfg.database_url),
+        ) as ctx:
             try:
                 auditor = Auditor(
                     sources=[source],
@@ -239,7 +242,10 @@ def demo(output_format: str, output_path: str | None, database_path: str) -> Non
         analyzers = _build_analyzers(cfg)
         reporters = _build_reporters(output_format, output_path)
 
-        with ScanLeaseContext(db, owner_token) as ctx:
+        with ScanLeaseContext(
+            db, owner_token,
+            renewal_factory=lambda: create_storage(database_path),
+        ) as ctx:
             try:
                 auditor = Auditor(
                     sources=[source],

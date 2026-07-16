@@ -5,19 +5,41 @@ These describe what callers depend on, not how the storage is implemented.
 
 Structural compatibility note
 ------------------------------
-``Database`` in kb_audit.db satisfies all protocols below structurally
-(duck-typing).  It does not explicitly inherit from ``AuditStorage`` because
-``update_workflow`` uses a module-private sentinel type (``_UnsetType``) that
-would require leaking an internal detail into this contract module.
-Structural compatibility is sufficient for both runtime isinstance checks
-(via ``@runtime_checkable``) and as a documentation contract.
+Both ``SqliteStorage`` and ``PostgresStorage`` satisfy the ``AuditStorage``
+protocol below structurally (duck-typing).  They do not explicitly inherit
+from it.  Structural compatibility is sufficient for both runtime isinstance
+checks (via ``@runtime_checkable``) and as a documentation contract.
 """
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from kb_audit.models import AuditResult, Document
+from kb_audit.models import AuditResult, Document, WorkflowState
+
+
+class _UnsetType:
+    """Sentinel for update_workflow() parameters not present in the request.
+
+    ``None`` means "explicitly set this field to NULL/empty."
+    ``_UNSET`` means "this field was not supplied; leave it unchanged."
+    """
+
+    _instance: _UnsetType | None = None
+
+    def __new__(cls) -> _UnsetType:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "<UNSET>"
+
+
+#: Singleton sentinel used as the default for every keyword argument of
+#: ``update_workflow()``.  Import this alongside the storage class when
+#: you need to pass ``_UNSET`` explicitly.
+_UNSET: _UnsetType = _UnsetType()
 
 
 @runtime_checkable
@@ -120,12 +142,12 @@ class WorkflowStore(Protocol):
         self,
         finding_key: str,
         *,
-        state: object = ...,
-        note: object = ...,
-        assigned_owner: object = ...,
-        due_date: object = ...,
-        snoozed_until: object = ...,
-        dismissal_reason: object = ...,
+        state: WorkflowState | None | _UnsetType = ...,
+        note: str | None | _UnsetType = ...,
+        assigned_owner: str | None | _UnsetType = ...,
+        due_date: str | None | _UnsetType = ...,
+        snoozed_until: str | None | _UnsetType = ...,
+        dismissal_reason: str | None | _UnsetType = ...,
     ) -> bool: ...
     def get_findings(
         self,

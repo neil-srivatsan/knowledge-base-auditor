@@ -50,7 +50,6 @@ class TestBuildAnalyzers:
     def test_internal_links_analyzer_present(self):
         from kb_audit.web.app import _build_analyzers
         from kb_audit.config import Config
-        from kb_audit.analyzers.internal_links import InternalLinkAnalyzer
         analyzers = _build_analyzers(Config())
         names = [a.name() for a in analyzers]
         assert "internal_links" in names
@@ -1332,7 +1331,7 @@ class TestScanLease:
     # ScanLeaseContext._renewal_loop unit tests (no real sleeps; interval=0)
     # ------------------------------------------------------------------
 
-    def test_failed_renewal_sets_ownership_lost_and_stops(self, tmp_path):
+    def test_failed_renewal_sets_ownership_lost_and_stops(self):
         """When renew_lease returns False the loop sets _ownership_lost and exits."""
         from kb_audit.db import ScanLeaseContext
 
@@ -1340,27 +1339,23 @@ class TestScanLease:
         mock_rdb.renew_lease.return_value = False
 
         mock_db = MagicMock()
-        mock_db._path = str(tmp_path / "test.db")
+        ctx = ScanLeaseContext(mock_db, "token", renewal_factory=lambda: mock_rdb)
 
-        ctx = ScanLeaseContext(mock_db, "token")
-
-        with patch("kb_audit.storage.sqlite.SqliteStorage", return_value=mock_rdb), \
-             patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
+        with patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
             ctx._renewal_loop()
 
         assert ctx._ownership_lost.is_set()
         assert ctx._stop.is_set()
+        mock_rdb.connect.assert_called()
         mock_rdb.close.assert_called()
 
-    def test_heartbeat_db_closes_on_success(self, tmp_path):
+    def test_heartbeat_db_closes_on_success(self):
         """DB connection is closed in a finally block even when renewal succeeds."""
         from kb_audit.db import ScanLeaseContext
 
         mock_rdb = MagicMock()
         mock_db = MagicMock()
-        mock_db._path = str(tmp_path / "test.db")
-
-        ctx = ScanLeaseContext(mock_db, "token")
+        ctx = ScanLeaseContext(mock_db, "token", renewal_factory=lambda: mock_rdb)
 
         def renew_and_stop(token, **kw):
             ctx._stop.set()   # cause the loop to exit after this iteration
@@ -1368,22 +1363,20 @@ class TestScanLease:
 
         mock_rdb.renew_lease.side_effect = renew_and_stop
 
-        with patch("kb_audit.storage.sqlite.SqliteStorage", return_value=mock_rdb), \
-             patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
+        with patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
             ctx._renewal_loop()
 
         assert not ctx._ownership_lost.is_set()
+        mock_rdb.connect.assert_called()
         mock_rdb.close.assert_called()
 
-    def test_heartbeat_db_closes_on_exception(self, tmp_path):
+    def test_heartbeat_db_closes_on_exception(self):
         """DB connection is closed even when renewal raises an exception."""
         from kb_audit.db import ScanLeaseContext
 
         mock_rdb = MagicMock()
         mock_db = MagicMock()
-        mock_db._path = str(tmp_path / "test.db")
-
-        ctx = ScanLeaseContext(mock_db, "token")
+        ctx = ScanLeaseContext(mock_db, "token", renewal_factory=lambda: mock_rdb)
 
         def raise_and_stop(token, **kw):
             ctx._stop.set()
@@ -1391,11 +1384,11 @@ class TestScanLease:
 
         mock_rdb.renew_lease.side_effect = raise_and_stop
 
-        with patch("kb_audit.storage.sqlite.SqliteStorage", return_value=mock_rdb), \
-             patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
+        with patch("kb_audit.storage.sqlite.RENEW_INTERVAL_SECONDS", 0):
             ctx._renewal_loop()
 
         assert not ctx._ownership_lost.is_set()   # exception != ownership loss
+        mock_rdb.connect.assert_called()
         mock_rdb.close.assert_called()
 
     # ------------------------------------------------------------------

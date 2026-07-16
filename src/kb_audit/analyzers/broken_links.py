@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
@@ -18,6 +20,40 @@ _URL_RE = re.compile(r"https?://[^\s<>\"\')]+")
 
 # Skip internal Notion links — these aren't checkable via HTTP
 _NOTION_INTERNAL_RE = re.compile(r"https?://(?:www\.)?(?:notion\.so|(?:app\.)?notion\.com)/")
+
+def _is_internal_url(url: str) -> bool:
+    """Return True if *url* targets a local/private/internal network address.
+
+    Only inspects the literal hostname or IP in the URL — no DNS resolution.
+    Returns False for hostnames that are not localhost or a literal private IP,
+    preserving existing behavior for ordinary public hostnames.
+    """
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+    except Exception:
+        return False
+
+    if not host:
+        return False
+
+    # Known localhost names (and subdomains like foo.localhost)
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+
+    # Literal IP address check — private/loopback/link-local/reserved/multicast
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # not a literal IP — leave to existing behavior
+
+    return (
+        addr.is_loopback
+        or addr.is_link_local
+        or addr.is_private
+        or addr.is_multicast
+        or addr.is_reserved
+        or addr.is_unspecified
+    )
 
 
 def _extract_urls(doc: Document) -> list[str]:
@@ -36,8 +72,8 @@ def _extract_urls(doc: Document) -> list[str]:
         url = match.group(0).rstrip(".,;:!?)")
         urls.add(url)
 
-    # Filter out internal Notion links
-    return [u for u in urls if not _NOTION_INTERNAL_RE.match(u)]
+    # Filter out internal Notion links and private/local network targets
+    return [u for u in urls if not _NOTION_INTERNAL_RE.match(u) and not _is_internal_url(u)]
 
 
 def _check_url(url: str, timeout: float = 10.0) -> tuple[str, int | None, str | None]:

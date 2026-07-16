@@ -50,8 +50,10 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any, Protocol
 
 from kb_audit.models import AuditResult, Document, WorkflowState
+from kb_audit.storage.contracts import _UNSET, _UnsetType
 from kb_audit.storage.postgres_support import require_psycopg
 from kb_audit.storage.schema_postgres import iter_postgres_schema_statements
 from kb_audit.storage.serialization import (
@@ -66,10 +68,40 @@ from kb_audit.storage.serialization import (
 from kb_audit.storage.sqlite import (
     LEASE_DURATION_SECONDS,
     LeaseLostError,
-    _UNSET,
-    _UnsetType,
     _summarize_changes,
 )
+
+
+# ---------------------------------------------------------------------------
+# Minimal structural protocols for psycopg connection / cursor.
+# These are local to this module so that ``import kb_audit.storage.postgres``
+# never requires psycopg to be installed.
+# ---------------------------------------------------------------------------
+
+class _Cursor(Protocol):
+    """Methods used from a psycopg cursor."""
+
+    rowcount: int
+
+    def execute(self, query: str, params: Any = ...) -> Any: ...
+    def fetchone(self) -> tuple[Any, ...] | None: ...
+    def fetchall(self) -> list[tuple[Any, ...]]: ...
+
+
+class _CursorContext(Protocol):
+    """Context manager that yields a ``_Cursor``."""
+
+    def __enter__(self) -> _Cursor: ...
+    def __exit__(self, *args: Any) -> Any: ...
+
+
+class _Connection(Protocol):
+    """Methods used from a psycopg connection."""
+
+    def cursor(self) -> _CursorContext: ...
+    def commit(self) -> None: ...
+    def rollback(self) -> None: ...
+    def close(self) -> None: ...
 
 
 class PostgresStorage:
@@ -88,7 +120,7 @@ class PostgresStorage:
 
     def __init__(self, database_url: str | os.PathLike[str]) -> None:
         self._database_url = str(database_url)
-        self._conn: object | None = None  # psycopg.Connection typed as object to avoid import
+        self._conn: _Connection | None = None
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -125,7 +157,7 @@ class PostgresStorage:
     def close(self) -> None:
         """Close the connection if open.  Safe to call more than once."""
         if self._conn is not None:
-            self._conn.close()  # type: ignore[union-attr]
+            self._conn.close()
             self._conn = None
 
     # ------------------------------------------------------------------
@@ -133,7 +165,7 @@ class PostgresStorage:
     # ------------------------------------------------------------------
 
     @property
-    def conn(self) -> object:
+    def conn(self) -> _Connection:
         """Return the active psycopg connection.
 
         Raises
@@ -168,64 +200,64 @@ class PostgresStorage:
         return now_dt + timedelta(seconds=LEASE_DURATION_SECONDS)
 
     @staticmethod
-    def _abandon_running_scans(cur: object, expired_token: str, finished_at: datetime) -> None:
+    def _abandon_running_scans(cur: _Cursor, expired_token: str, finished_at: datetime) -> None:
         """Mark running scans from *expired_token* as failed and delete their data.
 
         Called within a caller-owned transaction — does NOT commit.
         """
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute(
             "SELECT id FROM scans WHERE status = 'running' AND owner_token = %s",
             (expired_token,),
         )
-        rows = cur.fetchall()  # type: ignore[union-attr]
+        rows = cur.fetchall()
         for (scan_id,) in rows:
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "DELETE FROM audit_results WHERE scan_id = %s",
                 (scan_id,),
             )
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "DELETE FROM documents WHERE scan_id = %s",
                 (scan_id,),
             )
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "UPDATE scans SET status = 'failed', "
                 "error = 'abandoned: lease expired', finished_at = %s WHERE id = %s",
                 (finished_at, scan_id),
             )
 
     @staticmethod
-    def _assert_scan_running(cur: object, scan_id: int, owner_token: str | None) -> None:
+    def _assert_scan_running(cur: _Cursor, scan_id: int, owner_token: str | None) -> None:
         """Raise ``LeaseLostError`` if the scan is not running or owner mismatch."""
         if owner_token is not None:
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "SELECT 1 FROM scans "
                 "WHERE id = %s AND owner_token = %s AND status = 'running'",
                 (scan_id, owner_token),
             )
         else:
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "SELECT 1 FROM scans "
                 "WHERE id = %s AND owner_token IS NULL AND status = 'running'",
                 (scan_id,),
             )
-        if cur.fetchone() is None:  # type: ignore[union-attr]
+        if cur.fetchone() is None:
             raise LeaseLostError(
                 f"Scan {scan_id} is not running or not owned by the current token"
             )
 
-    def _check_lease(self, cur: object, owner_token: str, now_dt: datetime) -> None:
+    def _check_lease(self, cur: _Cursor, owner_token: str, now_dt: datetime) -> None:
         """Raise ``LeaseLostError`` if the lease is no longer valid.
 
         Issues ``SELECT … FOR UPDATE`` to lock the singleton scan_state row
         within the caller's transaction.
         """
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute(
             "SELECT 1 FROM scan_state "
             "WHERE id = 1 AND in_progress = TRUE AND owner_token = %s "
             "AND lease_expires_at IS NOT NULL AND lease_expires_at > %s FOR UPDATE",
             (owner_token, now_dt),
         )
-        if cur.fetchone() is None:  # type: ignore[union-attr]
+        if cur.fetchone() is None:
             raise LeaseLostError(
                 f"Lease not held or expired for token {owner_token!r}"
             )
@@ -250,41 +282,41 @@ class PostgresStorage:
         conn = self.conn
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
-                cur.execute(  # type: ignore[union-attr]
+            with conn.cursor() as cur:
+                cur.execute(
                     "SELECT in_progress, lease_expires_at, owner_token "
                     "FROM scan_state WHERE id = 1 FOR UPDATE"
                 )
-                row = cur.fetchone()  # type: ignore[union-attr]
+                row = cur.fetchone()
 
                 # Live lease: in_progress and expiry is in the future.
                 if row and row[0] and (row[1] is None or row[1] > now_dt):
-                    conn.rollback()  # type: ignore[union-attr]
+                    conn.rollback()
                     return None
 
                 # Block if an unleased scan is running (no concurrent owner).
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "SELECT 1 FROM scans WHERE status = 'running' AND owner_token IS NULL"
                 )
-                if cur.fetchone() is not None:  # type: ignore[union-attr]
-                    conn.rollback()  # type: ignore[union-attr]
+                if cur.fetchone() is not None:
+                    conn.rollback()
                     return None
 
                 # Abandon running scans from the now-expired previous owner.
                 if row and row[2]:
                     self._abandon_running_scans(cur, row[2], now_dt)
 
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "UPDATE scan_state "
                     "SET in_progress = TRUE, scan_error = NULL, "
                     "owner_token = %s, lease_expires_at = %s WHERE id = 1",
                     (token, expires_at),
                 )
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
             return token
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -299,15 +331,15 @@ class PostgresStorage:
         expires_at = self._expires_at(now_dt)
         conn = self.conn
 
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "UPDATE scan_state SET lease_expires_at = %s "
                 "WHERE id = 1 AND in_progress = TRUE AND owner_token = %s "
                 "AND lease_expires_at IS NOT NULL AND lease_expires_at > %s",
                 (expires_at, owner_token, now_dt),
             )
-            updated = cur.rowcount  # type: ignore[union-attr]
-        conn.commit()  # type: ignore[union-attr]
+            updated = cur.rowcount
+        conn.commit()
         return updated > 0
 
     def owns_live_lease(self, owner_token: str, now: str | None = None) -> bool:
@@ -315,14 +347,14 @@ class PostgresStorage:
         now_dt = self._now_dt(now)
         conn = self.conn
 
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT 1 FROM scan_state "
                 "WHERE id = 1 AND in_progress = TRUE AND owner_token = %s "
                 "AND lease_expires_at IS NOT NULL AND lease_expires_at > %s",
                 (owner_token, now_dt),
             )
-            row = cur.fetchone()  # type: ignore[union-attr]
+            row = cur.fetchone()
         return row is not None
 
     def end_scan(
@@ -341,8 +373,8 @@ class PostgresStorage:
         sanitized = sanitize_error(error)
         conn = self.conn
 
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "UPDATE scan_state "
                 "SET in_progress = FALSE, owner_token = NULL, lease_expires_at = NULL, "
                 "last_scan_id = %s, scan_error = %s "
@@ -350,8 +382,8 @@ class PostgresStorage:
                 "AND lease_expires_at IS NOT NULL AND lease_expires_at > %s",
                 (last_scan_id, sanitized, owner_token, now_dt),
             )
-            updated = cur.rowcount  # type: ignore[union-attr]
-        conn.commit()  # type: ignore[union-attr]
+            updated = cur.rowcount
+        conn.commit()
         return updated > 0
 
     def get_scan_state(self, now: str | None = None) -> dict:
@@ -363,12 +395,12 @@ class PostgresStorage:
         now_dt = self._now_dt(now)
         conn = self.conn
 
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT in_progress, last_scan_id, scan_error, lease_expires_at "
                 "FROM scan_state WHERE id = 1"
             )
-            row = cur.fetchone()  # type: ignore[union-attr]
+            row = cur.fetchone()
 
         if row is None:
             return {"in_progress": False, "last_scan_id": None, "scan_error": None}
@@ -388,14 +420,14 @@ class PostgresStorage:
     def reset_scan_state(self) -> None:
         """Unconditionally clear scan state — for admin use."""
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "UPDATE scan_state "
                 "SET in_progress = FALSE, owner_token = NULL, "
                 "lease_expires_at = NULL, last_scan_id = NULL, scan_error = NULL "
                 "WHERE id = 1"
             )
-        conn.commit()  # type: ignore[union-attr]
+        conn.commit()
 
     # ------------------------------------------------------------------
     # Scan lifecycle methods
@@ -415,39 +447,40 @@ class PostgresStorage:
         conn = self.conn
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "INSERT INTO scans (started_at, status, owner_token) "
                         "VALUES (%s, 'running', %s) RETURNING id",
                         (started_at, owner_token),
                     )
                 else:
                     # Unleased path: reject if a live lease is held.
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "SELECT 1 FROM scan_state "
                         "WHERE id = 1 AND in_progress = TRUE "
                         "AND lease_expires_at IS NOT NULL AND lease_expires_at > %s "
                         "FOR UPDATE",
                         (now_dt,),
                     )
-                    if cur.fetchone() is not None:  # type: ignore[union-attr]
+                    if cur.fetchone() is not None:
                         raise LeaseLostError(
                             "Cannot start an unleased scan while a live lease is held"
                         )
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "INSERT INTO scans (started_at, status, owner_token) "
                         "VALUES (%s, 'running', NULL) RETURNING id",
                         (started_at,),
                     )
-                row = cur.fetchone()  # type: ignore[union-attr]
+                row = cur.fetchone()
+                assert row is not None, "RETURNING id returned no row"
                 scan_id: int = row[0]
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
             return scan_id
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -465,19 +498,19 @@ class PostgresStorage:
         conn = self.conn
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 self._assert_scan_running(cur, scan_id, owner_token)
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "UPDATE scans SET status = 'completed', finished_at = %s, "
                     "document_count = %s WHERE id = %s",
                     (finished_at, document_count, scan_id),
                 )
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -502,25 +535,25 @@ class PostgresStorage:
         conn = self.conn
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 self._assert_scan_running(cur, scan_id, owner_token)
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "DELETE FROM audit_results WHERE scan_id = %s", (scan_id,)
                 )
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "DELETE FROM documents WHERE scan_id = %s", (scan_id,)
                 )
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "UPDATE scans SET status = 'failed', error = %s, finished_at = %s "
                     "WHERE id = %s",
                     (sanitized, finished_at, scan_id),
                 )
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -566,15 +599,15 @@ class PostgresStorage:
         )
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 self._assert_scan_running(cur, scan_id, owner_token)
-                cur.execute(_sql, _params)  # type: ignore[union-attr]
-            conn.commit()  # type: ignore[union-attr]
+                cur.execute(_sql, _params)
+            conn.commit()
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -619,15 +652,15 @@ class PostgresStorage:
         )
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 self._assert_scan_running(cur, scan_id, owner_token)
-                cur.execute(_sql, _params)  # type: ignore[union-attr]
-            conn.commit()  # type: ignore[union-attr]
+                cur.execute(_sql, _params)
+            conn.commit()
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -635,19 +668,19 @@ class PostgresStorage:
     def get_previous_hashes(self) -> dict[str, str]:
         """Return ``{doc_id: content_hash}`` from the most recent completed scan."""
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT id FROM scans WHERE status = 'completed' ORDER BY id DESC LIMIT 1"
             )
-            row = cur.fetchone()  # type: ignore[union-attr]
+            row = cur.fetchone()
             if not row:
                 return {}
             prev_scan_id = row[0]
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "SELECT id, content_hash FROM documents WHERE scan_id = %s",
                 (prev_scan_id,),
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
         return {r[0]: r[1] for r in rows}
 
     def carry_forward_results(
@@ -669,19 +702,19 @@ class PostgresStorage:
         conn = self.conn
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 self._assert_scan_running(cur, scan_id, owner_token)
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "SELECT id FROM scans WHERE status = 'completed' ORDER BY id DESC LIMIT 1"
                 )
-                row = cur.fetchone()  # type: ignore[union-attr]
+                row = cur.fetchone()
                 if not row:
                     count = 0
                 else:
                     prev_scan_id = row[0]
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "INSERT INTO audit_results "
                         "(document_id, scan_id, overall_status, signals, "
                         "suggested_replacement_id, confidence, confidence_reason, trust_data) "
@@ -698,12 +731,12 @@ class PostgresStorage:
                         "trust_data = EXCLUDED.trust_data",
                         (scan_id, prev_scan_id, doc_ids),
                     )
-                    count = cur.rowcount  # type: ignore[union-attr]
-            conn.commit()  # type: ignore[union-attr]
+                    count = cur.rowcount
+            conn.commit()
             return count
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -718,8 +751,8 @@ class PostgresStorage:
         if not doc_ids:
             return []
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT d.id, d.title, d.source_type, d.url, "
                 "ar.overall_status, ar.signals::text, ar.confidence, "
                 "ar.confidence_reason, ar.trust_data::text "
@@ -728,7 +761,7 @@ class PostgresStorage:
                 "WHERE ar.scan_id = %s AND ar.document_id = ANY(%s)",
                 (scan_id, doc_ids),
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
         results: list[AuditResult] = []
         for r in rows:
             doc = Document(id=r[0], title=r[1], content="", source_type=r[2], url=r[3])
@@ -754,8 +787,8 @@ class PostgresStorage:
         datetime object, preserving the same shape as the SQLite implementation.
         """
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT d.id, d.title, d.url, d.source_type, d.last_modified, "
                 "ar.overall_status, ar.signals::text, ar.suggested_replacement_id, "
                 "ar.confidence, ar.confidence_reason, ar.trust_data::text "
@@ -773,7 +806,7 @@ class PostgresStorage:
                 "ar.confidence ASC",
                 (scan_id,),
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
         results = []
         for r in rows:
             last_modified = r[4]
@@ -863,7 +896,7 @@ class PostgresStorage:
         }
 
     def _enrich_finding_with_audit_context_pg(
-        self, finding: dict, cur: object
+        self, finding: dict, cur: _Cursor
     ) -> dict:
         """Join audit_results + documents for a finding's last_seen scan.
 
@@ -877,7 +910,7 @@ class PostgresStorage:
             finding["audit_context"] = None
             return finding
 
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute(
             "SELECT ar.overall_status, ar.confidence, ar.confidence_reason, "
             "ar.signals::text, ar.trust_data::text, d.url "
             "FROM audit_results ar "
@@ -885,7 +918,7 @@ class PostgresStorage:
             "WHERE ar.scan_id = %s AND ar.document_id = %s",
             (scan_id, doc_id),
         )
-        row = cur.fetchone()  # type: ignore[union-attr]
+        row = cur.fetchone()
         if row is None:
             finding["audit_context"] = None
             return finding
@@ -904,7 +937,7 @@ class PostgresStorage:
 
     def _do_sync_findings_pg(
         self,
-        cur: object,
+        cur: _Cursor,
         scan_id: int,
         results: list[AuditResult],
         scanned_doc_ids: set[str] | None,
@@ -929,15 +962,15 @@ class PostgresStorage:
             seen_keys.add(key)
 
             ev_hash = result.evidence_hash
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "SELECT workflow_state, evidence_hash, snoozed_until "
                 "FROM finding_workflow WHERE finding_key = %s",
                 (key,),
             )
-            existing = cur.fetchone()  # type: ignore[union-attr]
+            existing = cur.fetchone()
 
             if existing is None:
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "INSERT INTO finding_workflow "
                     "(finding_key, document_id, source_type, title, "
                     "workflow_state, evidence_hash, "
@@ -972,7 +1005,7 @@ class PostgresStorage:
                 )
 
                 if should_reopen_snooze or should_reopen_evidence:
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "UPDATE finding_workflow "
                         "SET workflow_state = 'open', evidence_hash = %s, title = %s, "
                         "last_seen_scan_id = %s, last_checked_scan_id = %s, "
@@ -982,7 +1015,7 @@ class PostgresStorage:
                     )
                     stats["reopened"] += 1
                 elif is_reanalyzed:
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "UPDATE finding_workflow "
                         "SET last_seen_scan_id = %s, last_checked_scan_id = %s, "
                         "title = %s, evidence_hash = %s, updated_at = %s "
@@ -991,7 +1024,7 @@ class PostgresStorage:
                     )
                     stats["updated"] += 1
                 else:
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "UPDATE finding_workflow "
                         "SET last_checked_scan_id = %s, updated_at = %s "
                         "WHERE finding_key = %s",
@@ -1001,15 +1034,15 @@ class PostgresStorage:
 
         if scanned_doc_ids:
             auto_fixable = {"open", "acknowledged", "snoozed", "accepted_risk", "dismissed"}
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "SELECT finding_key, workflow_state FROM finding_workflow "
                 "WHERE document_id = ANY(%s) AND workflow_state = ANY(%s)",
                 (list(scanned_doc_ids), list(auto_fixable)),
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
             for fk, _state in rows:
                 if fk not in seen_keys:
-                    cur.execute(  # type: ignore[union-attr]
+                    cur.execute(
                         "UPDATE finding_workflow "
                         "SET workflow_state = 'fixed', last_checked_scan_id = %s, "
                         "note = %s, updated_at = %s "
@@ -1018,7 +1051,7 @@ class PostgresStorage:
                     )
                     stats["auto_fixed"] += 1
 
-            cur.execute(  # type: ignore[union-attr]
+            cur.execute(
                 "UPDATE finding_workflow SET last_checked_scan_id = %s "
                 "WHERE document_id = ANY(%s)",
                 (scan_id, list(scanned_doc_ids)),
@@ -1049,23 +1082,23 @@ class PostgresStorage:
         conn = self.conn
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 self._assert_scan_running(cur, scan_id, owner_token)
                 stats = self._do_sync_findings_pg(
                     cur, scan_id, results, scanned_doc_ids, reanalyzed_doc_ids
                 )
-                cur.execute(  # type: ignore[union-attr]
+                cur.execute(
                     "UPDATE scans SET status = 'completed', finished_at = %s, "
                     "document_count = %s WHERE id = %s",
                     (finished_at, document_count, scan_id),
                 )
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
             return stats
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -1090,18 +1123,18 @@ class PostgresStorage:
         conn = self.conn
 
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 self._assert_scan_running(cur, scan_id, owner_token)
                 stats = self._do_sync_findings_pg(
                     cur, scan_id, results, scanned_doc_ids, reanalyzed_doc_ids
                 )
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
             return stats
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -1169,16 +1202,16 @@ class PostgresStorage:
 
         conn = self.conn
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
-                cur.execute(  # type: ignore[union-attr]
+            with conn.cursor() as cur:
+                cur.execute(
                     f"UPDATE finding_workflow SET {', '.join(sets)} WHERE finding_key = %s",
                     params,
                 )
-                updated = cur.rowcount  # type: ignore[union-attr]
-            conn.commit()  # type: ignore[union-attr]
+                updated = cur.rowcount
+            conn.commit()
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -1219,8 +1252,8 @@ class PostgresStorage:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 f"SELECT finding_key, document_id, source_type, title, "
                 f"workflow_state, note, assigned_owner, due_date, "
                 f"snoozed_until, dismissal_reason, evidence_hash, "
@@ -1235,15 +1268,15 @@ class PostgresStorage:
                 f"END, updated_at DESC",
                 params,
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
             findings = [self._row_to_finding(r) for r in rows]
             return [self._enrich_finding_with_audit_context_pg(f, cur) for f in findings]
 
     def get_finding(self, finding_key: str) -> dict | None:
         """Return a single finding by key, or ``None``."""
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT finding_key, document_id, source_type, title, "
                 "workflow_state, note, assigned_owner, due_date, "
                 "snoozed_until, dismissal_reason, evidence_hash, "
@@ -1252,7 +1285,7 @@ class PostgresStorage:
                 "FROM finding_workflow WHERE finding_key = %s",
                 (finding_key,),
             )
-            row = cur.fetchone()  # type: ignore[union-attr]
+            row = cur.fetchone()
             if row is None:
                 return None
             finding = self._row_to_finding(row)
@@ -1281,13 +1314,13 @@ class PostgresStorage:
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 f"SELECT workflow_state, COUNT(*) "
                 f"FROM finding_workflow {where} GROUP BY workflow_state",
                 params,
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
         return {r[0]: r[1] for r in rows}
 
     # ------------------------------------------------------------------
@@ -1303,8 +1336,8 @@ class PostgresStorage:
         not appear in *prev_scan_id*.
         """
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT cur.document_id, d.title, "
                 "prev.overall_status AS old_status, cur.overall_status AS new_status "
                 "FROM audit_results cur "
@@ -1317,7 +1350,7 @@ class PostgresStorage:
                 "OR prev.overall_status != cur.overall_status)",
                 (prev_scan_id, scan_id),
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
         return [
             {
                 "document_id": r[0],
@@ -1341,8 +1374,8 @@ class PostgresStorage:
         so the shape matches ``SqliteStorage.get_scan_history``.
         """
         conn = self.conn
-        with conn.cursor() as cur:  # type: ignore[union-attr]
-            cur.execute(  # type: ignore[union-attr]
+        with conn.cursor() as cur:
+            cur.execute(
                 "SELECT s.id, s.started_at, s.finished_at, s.document_count, "
                 "COUNT(CASE WHEN ar.overall_status = 'stale' THEN 1 END) AS stale, "
                 "COUNT(CASE WHEN ar.overall_status = 'needs_review' THEN 1 END) AS needs_review, "
@@ -1355,10 +1388,10 @@ class PostgresStorage:
                 "LIMIT %s",
                 (limit,),
             )
-            rows = cur.fetchall()  # type: ignore[union-attr]
+            rows = cur.fetchall()
 
         def _ts(v: object) -> object:
-            return v.isoformat() if hasattr(v, "isoformat") else v  # type: ignore[union-attr]
+            return v.isoformat() if hasattr(v, "isoformat") else v  # type: ignore[attr-defined]
 
         scans = [
             {
@@ -1388,7 +1421,7 @@ class PostgresStorage:
     # Maintenance
     # ------------------------------------------------------------------
 
-    def _execute_clear_pg(self, cur: object) -> None:
+    def _execute_clear_pg(self, cur: _Cursor) -> None:
         """Delete all scan/result/workflow data and reset scan_state on *cur*.
 
         Assumes the caller owns the transaction — does NOT commit.
@@ -1396,11 +1429,11 @@ class PostgresStorage:
         ``sqlite_sequence`` step (Postgres sequences are unaffected by
         row deletion).
         """
-        cur.execute("DELETE FROM audit_results")  # type: ignore[union-attr]
-        cur.execute("DELETE FROM documents")  # type: ignore[union-attr]
-        cur.execute("DELETE FROM scans")  # type: ignore[union-attr]
-        cur.execute("DELETE FROM finding_workflow")  # type: ignore[union-attr]
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute("DELETE FROM audit_results")
+        cur.execute("DELETE FROM documents")
+        cur.execute("DELETE FROM scans")
+        cur.execute("DELETE FROM finding_workflow")
+        cur.execute(
             "UPDATE scan_state SET in_progress = FALSE, owner_token = NULL, "
             "lease_expires_at = NULL, last_scan_id = NULL, scan_error = NULL "
             "WHERE id = 1"
@@ -1414,12 +1447,12 @@ class PostgresStorage:
         """
         conn = self.conn
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 self._execute_clear_pg(cur)
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
@@ -1438,27 +1471,27 @@ class PostgresStorage:
         now_dt = self._now_dt(now)
         conn = self.conn
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
-                cur.execute(  # type: ignore[union-attr]
+            with conn.cursor() as cur:
+                cur.execute(
                     "SELECT in_progress, lease_expires_at "
                     "FROM scan_state WHERE id = 1 FOR UPDATE"
                 )
-                row = cur.fetchone()  # type: ignore[union-attr]
+                row = cur.fetchone()
                 # Live lease: in_progress and expiry is in the future.
                 if row and row[0] and (row[1] is None or row[1] > now_dt):
-                    conn.rollback()  # type: ignore[union-attr]
+                    conn.rollback()
                     return False
                 self._execute_clear_pg(cur)
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
             return True
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise
 
-    def _do_prune_scans_pg(self, cur: object, keep: int) -> int:
+    def _do_prune_scans_pg(self, cur: _Cursor, keep: int) -> int:
         """Delete terminal scans beyond the most recent *keep* on *cur*.
 
         Running scans are never deleted.  Returns the number of scan rows
@@ -1467,30 +1500,30 @@ class PostgresStorage:
         Mirrors ``SqliteStorage._do_prune_scans`` using ``%s`` placeholders
         and ``LIMIT 1 OFFSET %s`` (supported by PostgreSQL).
         """
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute(
             "SELECT id FROM scans WHERE status IN ('completed', 'failed') "
             "ORDER BY id DESC LIMIT 1 OFFSET %s",
             (keep - 1,),
         )
-        row = cur.fetchone()  # type: ignore[union-attr]
+        row = cur.fetchone()
         if not row:
             return 0
         cutoff_id = row[0]
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute(
             "DELETE FROM audit_results WHERE scan_id IN "
             "(SELECT id FROM scans WHERE id < %s AND status IN ('completed', 'failed'))",
             (cutoff_id,),
         )
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute(
             "DELETE FROM documents WHERE scan_id IN "
             "(SELECT id FROM scans WHERE id < %s AND status IN ('completed', 'failed'))",
             (cutoff_id,),
         )
-        cur.execute(  # type: ignore[union-attr]
+        cur.execute(
             "DELETE FROM scans WHERE id < %s AND status IN ('completed', 'failed')",
             (cutoff_id,),
         )
-        return cur.rowcount  # type: ignore[union-attr]
+        return cur.rowcount
 
     def prune_scans(
         self,
@@ -1509,15 +1542,15 @@ class PostgresStorage:
         now_dt = self._now_dt(now)
         conn = self.conn
         try:
-            with conn.cursor() as cur:  # type: ignore[union-attr]
+            with conn.cursor() as cur:
                 if owner_token is not None:
                     self._check_lease(cur, owner_token, now_dt)
                 count = self._do_prune_scans_pg(cur, keep)
-            conn.commit()  # type: ignore[union-attr]
+            conn.commit()
             return count
         except Exception:
             try:
-                conn.rollback()  # type: ignore[union-attr]
+                conn.rollback()
             except Exception:
                 pass
             raise

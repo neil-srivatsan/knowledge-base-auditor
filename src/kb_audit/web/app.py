@@ -341,13 +341,11 @@ def _run_scan(
 
         analyzers = _build_analyzers(cfg)
 
-        if _app_config.database_path is not None:
-            db = create_storage(_app_config.database_path)
-        else:
-            db = create_storage(cfg.database_url)
+        db_url = _app_config.database_path if _app_config.database_path is not None else cfg.database_url
+        db = create_storage(db_url)
         db.connect()
 
-        with ScanLeaseContext(db, owner_token) as ctx:
+        with ScanLeaseContext(db, owner_token, renewal_factory=lambda: create_storage(db_url)) as ctx:
             try:
                 auditor = Auditor(
                     sources=[source],

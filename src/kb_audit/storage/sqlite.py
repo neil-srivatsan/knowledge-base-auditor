@@ -16,12 +16,13 @@ import logging
 import sqlite3
 import threading
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from kb_audit.models import AuditResult, Document, WorkflowState
+from kb_audit.storage.contracts import AuditStorage, ScanLeaseStore, _UNSET, _UnsetType
 from kb_audit.storage.schema import initialize_schema
 from kb_audit.storage.serialization import (
     deserialize_signal_records,
@@ -34,28 +35,6 @@ from kb_audit.storage.serialization import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class _UnsetType:
-    """Sentinel for update_workflow() parameters not present in the request.
-
-    ``None`` means "explicitly set this field to NULL/empty."
-    ``_UNSET`` means "this field was not supplied; leave it unchanged."
-    """
-
-    _instance: _UnsetType | None = None
-
-    def __new__(cls) -> _UnsetType:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __repr__(self) -> str:
-        return "<UNSET>"
-
-
-#: Singleton sentinel.  Import alongside SqliteStorage when you need it.
-_UNSET: _UnsetType = _UnsetType()
 
 
 #: Backward-compatible alias — callers within this module use _sanitize_error.
@@ -90,9 +69,16 @@ class ScanLeaseContext:
                 raise
     """
 
-    def __init__(self, db: SqliteStorage, owner_token: str) -> None:
+    def __init__(
+        self,
+        db: ScanLeaseStore,
+        owner_token: str,
+        *,
+        renewal_factory: Callable[[], AuditStorage],
+    ) -> None:
         self._db = db
         self._owner_token = owner_token
+        self._renewal_factory = renewal_factory
         self._ownership_lost = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -155,7 +141,7 @@ class ScanLeaseContext:
     def _renewal_loop(self) -> None:
         """Heartbeat: renew the lease every RENEW_INTERVAL_SECONDS."""
         while not self._stop.wait(RENEW_INTERVAL_SECONDS):
-            rdb = SqliteStorage(self._db._path)
+            rdb = self._renewal_factory()
             try:
                 rdb.connect()
                 renewed = rdb.renew_lease(self._owner_token)
